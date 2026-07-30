@@ -81,6 +81,8 @@ src/main/java/dev/circuitbreaker/
 | **D4** | GovernanceException 统一映射：reactive `CircuitBreakerOperator` 经 `GovernanceException.forToken` 抛类型化异常，删除 `CircuitBreakerBlockedException`（`1343fd5`/`679faaf`） | UC-009 用 `CircuitBreakerBlockedException`，UC-002 用裸 switch | 回填 UC-002/UC-009：块码→GovernanceException 子类 |
 | D5 | `ResourceManager.register` 注册时 `LazyTokenBucket.seed` 预充满桶（实现细节） | 未提 | 可选补充（初始突发可用） |
 
+> ✅ **D1–D4 已回填（2026-07-30）**：BR-025（HALF_OPEN 自愈）、BR-007-config-validation（新增）、BR-010（22 位上限）、BR-004（GovernanceException 映射）——见对应 `usecases/*/rules.md`。BRD 历史文档现已与代码一致。
+
 一致项（无漂移）：SEG=16（BRD 谓"8 或 16"）、RCU `publishConfig`（BR-050）、代际机制（BR-024）、token 自描述（BR-060）、分级迟滞（BR-041）。
 
 ## Technical Insights

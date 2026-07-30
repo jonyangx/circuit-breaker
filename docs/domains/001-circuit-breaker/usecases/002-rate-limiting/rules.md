@@ -8,7 +8,7 @@
 #### 2.1 约束规则
 | 规则 ID | 规则名称 | 规则描述 | 适用用例 | 来源 |
 |---------|---------|---------|---------|------|
-| BR-010-token-bucket-layout | 桶状态位布局 | `bucketState` AtomicLong：高 42 位 Time \| 低 22 位 Tokens（≈139 年 / ≈400 万 QPS） | UC-004 | design §4.2.1 |
+| BR-010-token-bucket-layout | 桶状态位布局 | `bucketState` AtomicLong：高 42 位 Time \| 低 22 位 Tokens（≈139 年 / ≤4,194,303 QPS）。**capacity/qps ≤ 2²²−1（4,194,303）：refill 路径 nTok 对 TOKEN_MASK 取 min 防止 token 位溢出污染 Time 字段；PolicyBuilder 拒绝 qps>4,194,303（代码实现更新，对抗性审查 B1）** | UC-004 | design §4.2.1 |
 | BR-012-no-stripe-bucket | 令牌桶不分段 | 令牌桶持「全局 QPS 上限」不变量，分段会放大 N 倍放行或误杀；保留单 AtomicLong + 自旋。分段仅用于可交换求和量 | UC-004 | design §4.2 |
 
 #### 2.2 计算规则

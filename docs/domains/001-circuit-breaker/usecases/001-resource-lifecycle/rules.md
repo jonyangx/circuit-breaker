@@ -14,9 +14,10 @@
 | BR-001-resource-id-int | 整数 resourceId 寻址 | 资源用全局唯一整数 `resourceId`（0..1023）标识，经 `CONFIGS[]`/`STATES[]` 数组寻址，禁止 Map 查找 | UC-001 | design §3.3 |
 | BR-002-config-state-separation | 配置/状态分离 | `CONFIGS`（不可变、可 RCU 热换）与 `STATES`（长生命周期、规则变更时永不重建）分离；严禁把可变运行时状态耦合进可替换 Config | UC-001, UC-008 | design §3.1 / §8 |
 | BR-003-token-encoding | 64 位 token 位布局 | `[sign:1][time:41][version:6][bucketIdx:4][mask:12]`，符号位恒 0；位宽/偏移为编译期常量 | UC-002, UC-003 | design §3.2.1 |
-| BR-004-block-code-negative | 阻断码全负 | `BLOCK_SYSTEM_OVERLOAD=-1`、`BLOCK_CIRCUIT_BREAKER=-2`、`BLOCK_RATE_LIMITER=-3`、`BLOCK_CONCURRENCY=-4`；`token<0` 即阻断 | UC-002 | design §4.1 |
+| BR-004-block-code-negative | 阻断码全负 | `BLOCK_SYSTEM_OVERLOAD=-1`、`BLOCK_CIRCUIT_BREAKER=-2`、`BLOCK_RATE_LIMITER=-3`、`BLOCK_CONCURRENCY=-4`；`token<0` 即阻断。**块码→类型化异常经统一 `GovernanceException.forToken/throwFor`（base + 4 子类）；reactive `CircuitBreakerOperator` 亦经此映射，不再用独立异常类（代码实现更新，对抗性审查 D4）** | UC-002 | design §4.1 |
 | BR-005-bitmask-dispatch | 位掩码分派 | 按 `config.mask` 依次位与，相应位为 1 调用对应模块，任一失败即返回对应阻断码 | UC-002 | design §4.1 |
 | BR-006-monotonic-nanotime | 单调相对时钟 | 统一 `Time_now = System.nanoTime()/1_000_000 - START`；禁止 `currentTimeMillis()` 做治理判定 | 全部 | design §6.3 |
+| BR-007-config-validation | 配置入参校验 | `PolicyBuilder.build()` 校验：errThreshold∈(0,1]、ewmaTauMs>0、minCalls>0、qps∈(0,4_194_303]、concurrencyLimit>0、openMillis>0；违例抛 IllegalArgumentException（防止 always-trip/never-trip 等误配踩雷）（代码实现更新，对抗性审查 A2） | UC-001 | 实现 PolicyBuilder.build |
 
 **详细规则说明：**
 
