@@ -28,7 +28,7 @@ public final class EwmaCircuitBreaker {
 
     private EwmaCircuitBreaker() {}
 
-    public static boolean tryAcquire(ResourceState st, long nowMs) {
+    public static boolean tryAcquire(ResourceState st, ResourceConfig cfg, long nowMs) {
         long b = st.breakerState.get();
         int s = brState(b);
         if (s == CLOSED) {
@@ -37,12 +37,18 @@ public final class EwmaCircuitBreaker {
         if (s == OPEN) {
             if (nowMs >= brEnd(b)) {
                 // race to transition OPEN → HALF_OPEN; single winner becomes the probe.
-                return transition(st, OPEN, HALF_OPEN, 0L);
+                // endTime here doubles as the probe deadline (nowMs + openMillis), so a lost probe
+                // can self-heal (see HALF_OPEN branch) — no governance-side timer needed.
+                return transition(st, OPEN, HALF_OPEN, nowMs + cfg.openMillis);
             }
             return false;
         }
-        // HALF_OPEN: only the in-flight probe (the thread that won OPEN→HALF_OPEN) proceeds;
-        // it already returned true at transition. Others block here.
+        // HALF_OPEN: a single probe is in flight (the OPEN→HALF_OPEN winner). Others block.
+        // Self-heal (A1): if the probe did not resolve before its deadline (lost / forgotten release),
+        // re-arm the OPEN cycle so a fresh probe is elected after openMillis — never stuck forever.
+        if (nowMs >= brEnd(b)) {
+            transition(st, HALF_OPEN, OPEN, nowMs + cfg.openMillis);
+        }
         return false;
     }
 

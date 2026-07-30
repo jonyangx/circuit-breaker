@@ -34,7 +34,7 @@ public final class FlatExecutionEngine {
         ResourceConfig cfg = ResourceManager.CONFIGS.get(resourceId);
         long now = ClockSource.nowRelMs();
 
-        if ((cfg.mask & 0x01) != 0 && !EwmaCircuitBreaker.tryAcquire(st, now)) {
+        if ((cfg.mask & 0x01) != 0 && !EwmaCircuitBreaker.tryAcquire(st, cfg, now)) {
             st.blockCount.increment();
             return BlockCode.CIRCUIT_BREAKER;
         }

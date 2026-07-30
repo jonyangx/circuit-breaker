@@ -24,7 +24,7 @@ class EwmaCircuitBreakerTest {
     private static ResourceState trip() {
         ResourceState st = new ResourceState();
         ResourceConfig cfg = breakerCfg();
-        EwmaCircuitBreaker.tryAcquire(st, 0);
+        EwmaCircuitBreaker.tryAcquire(st, cfg, 0);
         for (int i = 1; i <= 5; i++) {
             EwmaCircuitBreaker.release(st, i * TAU, false, cfg, true); // now = 1000..5000
         }
@@ -36,16 +36,16 @@ class EwmaCircuitBreakerTest {
         ResourceState st = trip();
         ResourceConfig cfg = breakerCfg();
         assertThat(EwmaCircuitBreaker.brState(st.breakerState.get())).isEqualTo(EwmaCircuitBreaker.OPEN);
-        assertThat(EwmaCircuitBreaker.tryAcquire(st, 5500)).isFalse(); // before endTime(~6000) → blocked
+        assertThat(EwmaCircuitBreaker.tryAcquire(st, cfg, 5500)).isFalse(); // before endTime(~6000) → blocked
     }
 
     @Test
     void halfOpenSingleProbeThenRecover() {
         ResourceState st = trip();
         ResourceConfig cfg = breakerCfg();
-        assertThat(EwmaCircuitBreaker.tryAcquire(st, 7000)).isTrue();  // past endTime → probe wins OPEN→HALF_OPEN
+        assertThat(EwmaCircuitBreaker.tryAcquire(st, cfg, 7000)).isTrue();  // past endTime → probe wins OPEN→HALF_OPEN
         assertThat(EwmaCircuitBreaker.brState(st.breakerState.get())).isEqualTo(EwmaCircuitBreaker.HALF_OPEN);
-        assertThat(EwmaCircuitBreaker.tryAcquire(st, 7000)).isFalse(); // others blocked while probe in flight
+        assertThat(EwmaCircuitBreaker.tryAcquire(st, cfg, 7000)).isFalse(); // others blocked while probe in flight
         EwmaCircuitBreaker.release(st, 7000, true, cfg, true);          // probe success → CLOSED
         assertThat(EwmaCircuitBreaker.brState(st.breakerState.get())).isEqualTo(EwmaCircuitBreaker.CLOSED);
     }
@@ -54,7 +54,7 @@ class EwmaCircuitBreakerTest {
     void generationPreventsImmediateReTripAfterRecovery() {
         ResourceState st = trip();
         ResourceConfig cfg = breakerCfg();
-        EwmaCircuitBreaker.tryAcquire(st, 7000);               // → HALF_OPEN
+        EwmaCircuitBreaker.tryAcquire(st, cfg, 7000);               // → HALF_OPEN
         EwmaCircuitBreaker.release(st, 7000, true, cfg, true);  // → CLOSED (gen bumped → stale EWMA invalidated)
         // one failure right after recovery: count re-seeded to 1 < minCalls(5) → must NOT re-trip (BR-024)
         EwmaCircuitBreaker.release(st, 7001, false, cfg, true);
@@ -65,8 +65,27 @@ class EwmaCircuitBreakerTest {
     void probeFailureReopensBreaker() {
         ResourceState st = trip();
         ResourceConfig cfg = breakerCfg();
-        EwmaCircuitBreaker.tryAcquire(st, 7000);                // → HALF_OPEN
+        EwmaCircuitBreaker.tryAcquire(st, cfg, 7000);                // → HALF_OPEN
         EwmaCircuitBreaker.release(st, 7000, false, cfg, true); // probe fail → OPEN
         assertThat(EwmaCircuitBreaker.brState(st.breakerState.get())).isEqualTo(EwmaCircuitBreaker.OPEN);
+    }
+
+    @Test
+    void lostProbeSelfHealsAfterGrace() {
+        // A1: a lost HALF_OPEN probe (never released) must NOT strand the resource forever.
+        ResourceState st = trip();
+        ResourceConfig cfg = breakerCfg();
+        // trip endTime ≈ 6000; past it → elect a probe (HALF_OPEN, deadline 7000 + open 1000 = 8000)
+        assertThat(EwmaCircuitBreaker.tryAcquire(st, cfg, 7000)).isTrue();
+        assertThat(EwmaCircuitBreaker.brState(st.breakerState.get())).isEqualTo(EwmaCircuitBreaker.HALF_OPEN);
+        // probe is never released...
+        assertThat(EwmaCircuitBreaker.tryAcquire(st, cfg, 7500)).isFalse(); // before deadline → still blocked
+        // at/past the deadline → re-arm to OPEN (self-heal), this acquire blocked
+        assertThat(EwmaCircuitBreaker.tryAcquire(st, cfg, 9000)).isFalse();
+        assertThat(EwmaCircuitBreaker.brState(st.breakerState.get())).isEqualTo(EwmaCircuitBreaker.OPEN);
+        // past the re-armed OPEN window (9000 + 1000 = 10000) → fresh probe elected, recovers on success
+        assertThat(EwmaCircuitBreaker.tryAcquire(st, cfg, 10500)).isTrue();
+        EwmaCircuitBreaker.release(st, 10500, true, cfg, true);
+        assertThat(EwmaCircuitBreaker.brState(st.breakerState.get())).isEqualTo(EwmaCircuitBreaker.CLOSED);
     }
 }

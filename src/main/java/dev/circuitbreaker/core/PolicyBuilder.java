@@ -32,6 +32,26 @@ public final class PolicyBuilder {
     public PolicyBuilder enableConcurrency(int limit) { this.mask |= 0x04; this.concurrencyLimit = limit; return this; }
 
     public ResourceConfig build() {
+        if (openMillis <= 0) {
+            throw new IllegalArgumentException("openMillis must be > 0");
+        }
+        if ((mask & 0x02) != 0 && qps <= 0) {
+            throw new IllegalArgumentException("qps must be > 0");
+        }
+        if ((mask & 0x01) != 0) {
+            if (errThresholdPpm <= 0 || errThresholdPpm > 1_000_000) {
+                throw new IllegalArgumentException("circuit-breaker errThreshold must be in (0, 1]");
+            }
+            if (ewmaTauMs <= 0) {
+                throw new IllegalArgumentException("ewmaHalfLife must be > 0");
+            }
+            if (minCalls <= 0) {
+                throw new IllegalArgumentException("minimumCalls must be > 0");
+            }
+        }
+        if ((mask & 0x04) != 0 && concurrencyLimit <= 0) {
+            throw new IllegalArgumentException("concurrencyLimit must be > 0");
+        }
         return new ResourceConfig(mask, qps, capacity, errThresholdPpm, minCalls,
                 openMillis, ewmaTauMs, concurrencyLimit, 1);
     }

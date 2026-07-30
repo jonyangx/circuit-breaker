@@ -3,8 +3,9 @@ package dev.circuitbreaker.core;
 import org.junit.jupiter.api.Test;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
-/** PolicyBuilder composition tests (UC-001). */
+/** PolicyBuilder composition + validation tests (UC-001). */
 class PolicyBuilderTest {
 
     @Test
@@ -26,5 +27,21 @@ class PolicyBuilderTest {
         assertThat(c.openMillis).isEqualTo(3000);
         assertThat(c.concurrencyLimit).isEqualTo(50);
         assertThat(c.version).isEqualTo(1);
+    }
+
+    @Test
+    void rejectsInvalidConfig() {
+        // breaker threshold out of (0,1] → always-trip / never-trip footguns rejected
+        assertThatThrownBy(() -> new PolicyBuilder().enableCircuitBreaker(0f).build())
+                .isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> new PolicyBuilder().enableCircuitBreaker(1.5f).build())
+                .isInstanceOf(IllegalArgumentException.class);
+        // τ / minCalls / openMillis / qps / concurrency must be positive
+        assertThatThrownBy(() -> new PolicyBuilder().enableCircuitBreaker(0.5f).ewmaHalfLife(0).build())
+                .isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> new PolicyBuilder().enableRateLimit(0).build())
+                .isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> new PolicyBuilder().enableConcurrency(0).openMillis(0).build())
+                .isInstanceOf(IllegalArgumentException.class);
     }
 }
