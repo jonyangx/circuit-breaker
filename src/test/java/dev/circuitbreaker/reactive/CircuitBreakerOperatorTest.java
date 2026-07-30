@@ -1,6 +1,7 @@
 package dev.circuitbreaker.reactive;
 
 import dev.circuitbreaker.core.FlatExecutionEngine;
+import dev.circuitbreaker.core.GovernanceException;
 import dev.circuitbreaker.core.ResourceConfig;
 import dev.circuitbreaker.core.ResourceManager;
 import org.junit.jupiter.api.Test;
@@ -33,7 +34,7 @@ class CircuitBreakerOperatorTest {
         assertThat(held).isGreaterThanOrEqualTo(0);
 
         StepVerifier.create(CircuitBreakerOperator.wrap(rid, () -> Mono.just("never")))
-                .expectError(CircuitBreakerBlockedException.class)
+                .expectError(GovernanceException.class)
                 .verify();
 
         FlatExecutionEngine.release(rid, held, true); // cleanup

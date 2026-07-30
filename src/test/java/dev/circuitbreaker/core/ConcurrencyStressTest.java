@@ -45,9 +45,10 @@ class ConcurrencyStressTest {
                 }
             });
         }
-        latch.await();
-        es.shutdown();
+        boolean finished = latch.await(60, TimeUnit.SECONDS);
+        es.shutdown(); // always shut down the pool, even if a worker livelocked (no thread leak)
         es.awaitTermination(30, TimeUnit.SECONDS);
+        assertThat(finished).as("stress test did not finish in 60s — possible engine livelock").isTrue();
 
         assertThat(error.get()).as("no exception under contention").isNull();
         long total = (long) threads * perThread;
@@ -85,9 +86,10 @@ class ConcurrencyStressTest {
                 }
             });
         }
-        latch.await();
-        es.shutdown();
+        boolean finished = latch.await(60, TimeUnit.SECONDS);
+        es.shutdown(); // always shut down the pool, even if a worker livelocked (no thread leak)
         es.awaitTermination(30, TimeUnit.SECONDS);
+        assertThat(finished).as("stress test did not finish in 60s — possible engine livelock").isTrue();
 
         assertThat(error.get()).as("breaker never throws under contention").isNull();
         long total = (long) threads * perThread;

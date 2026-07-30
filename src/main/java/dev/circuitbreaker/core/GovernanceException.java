@@ -1,9 +1,9 @@
 package dev.circuitbreaker.core;
 
 /**
- * Unchecked exception hierarchy for governance block decisions (UC-002; BR-004).
- * {@link #throwFor(long)} maps a negative token (block code) to the matching subtype, so callers can
- * turn a blocked acquire into a typed exception in one line:
+ * Unchecked exception hierarchy for governance block decisions (UC-002; BR-004). The single source
+ * of truth for block-code → exception mapping (used by both the sync engine via {@link #throwFor}
+ * and the reactive operator via {@link #forToken}).
  *
  * <pre>{@code
  * long token = FlatExecutionEngine.tryAcquire(rid);
@@ -17,6 +17,8 @@ package dev.circuitbreaker.core;
  */
 public abstract class GovernanceException extends RuntimeException {
 
+    private static final long serialVersionUID = 1L;
+
     private final long blockCode;
 
     protected GovernanceException(long blockCode, String message) {
@@ -28,32 +30,43 @@ public abstract class GovernanceException extends RuntimeException {
         return blockCode;
     }
 
+    /** Returns the typed exception matching the given block code (for reactive Mono.error, etc.). */
+    public static GovernanceException forToken(long token) {
+        return switch ((int) token) {
+            case (int) BlockCode.RATE_LIMITER -> new RateLimitedException();
+            case (int) BlockCode.CIRCUIT_BREAKER -> new CircuitOpenException();
+            case (int) BlockCode.CONCURRENCY -> new ConcurrencyLimitedException();
+            case (int) BlockCode.SYSTEM_OVERLOAD -> new SystemOverloadedException();
+            default -> throw new IllegalStateException("not a block code: " + token);
+        };
+    }
+
     /** Throws the typed exception matching the given block code. */
     public static RuntimeException throwFor(long token) {
-        if (token == BlockCode.RATE_LIMITER) throw new RateLimitedException();
-        if (token == BlockCode.CIRCUIT_BREAKER) throw new CircuitOpenException();
-        if (token == BlockCode.CONCURRENCY) throw new ConcurrencyLimitedException();
-        if (token == BlockCode.SYSTEM_OVERLOAD) throw new SystemOverloadedException();
-        throw new IllegalStateException("not a block code: " + token);
+        throw forToken(token);
     }
 
     /** Rate limiting blocked the call ({@link BlockCode#RATE_LIMITER}). */
     public static final class RateLimitedException extends GovernanceException {
+        private static final long serialVersionUID = 1L;
         public RateLimitedException() { super(BlockCode.RATE_LIMITER, "rate limited"); }
     }
 
     /** Circuit breaker is open ({@link BlockCode#CIRCUIT_BREAKER}). */
     public static final class CircuitOpenException extends GovernanceException {
+        private static final long serialVersionUID = 1L;
         public CircuitOpenException() { super(BlockCode.CIRCUIT_BREAKER, "circuit breaker open"); }
     }
 
     /** Concurrency limit exceeded ({@link BlockCode#CONCURRENCY}). */
     public static final class ConcurrencyLimitedException extends GovernanceException {
+        private static final long serialVersionUID = 1L;
         public ConcurrencyLimitedException() { super(BlockCode.CONCURRENCY, "concurrency limit exceeded"); }
     }
 
     /** System overload graded shedding ({@link BlockCode#SYSTEM_OVERLOAD}). */
     public static final class SystemOverloadedException extends GovernanceException {
+        private static final long serialVersionUID = 1L;
         public SystemOverloadedException() { super(BlockCode.SYSTEM_OVERLOAD, "system overloaded"); }
     }
 }
