@@ -1,3 +1,5 @@
+import org.gradle.api.tasks.JavaExec
+
 plugins {
     java
 }
@@ -8,9 +10,27 @@ java {
     }
 }
 
-// JMH 微基准（SC-001/002 性能红线验证）。注：JMH 运行需额外 jmh 插件/注解处理器，
-// 此处先保证编译通过；正式 JMH 执行为 Phase 3 打磨项（待引入 me.champeleg.jmh 插件）。
+// Manual JMH setup (no third-party plugin) — empirically verify SC-001 (ns-level) and SC-002 (zero allocation).
+// Run: ./gradlew :circuit-breaker-benchmarks:jmh
+sourceSets {
+    create("jmh") {
+        java.srcDir("src/jmh/java")
+    }
+}
+
 dependencies {
-    implementation(project(":circuit-breaker-core"))
-    implementation("org.openjdk.jmh:jmh-core:1.37")
+    "jmhImplementation"(project(":circuit-breaker-core"))
+    "jmhImplementation"("org.openjdk.jmh:jmh-core:1.37")
+    "jmhAnnotationProcessor"("org.openjdk.jmh:jmh-generator-annprocess:1.37")
+}
+
+tasks.register<JavaExec>("jmh") {
+    group = "benchmark"
+    description = "Runs JMH benchmarks (timing + gc profiler for zero-allocation)."
+    dependsOn("jmhClasses")
+    val jmhSourceSet = sourceSets.getByName("jmh")
+    classpath = jmhSourceSet.runtimeClasspath
+    mainClass.set("org.openjdk.jmh.Main")
+    // Fast verification run: 2 warmup + 3 measurement iterations, 1 fork, gc profiler for alloc.rate.norm.
+    args = listOf("-wi", "2", "-i", "3", "-f", "1", "-w", "1s", "-r", "1s", "-tu", "ns", "-prof", "gc")
 }

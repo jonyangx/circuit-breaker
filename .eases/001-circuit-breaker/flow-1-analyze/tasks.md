@@ -162,12 +162,12 @@
 **目的**：性能门控、覆盖率、集成、文档
 
 - [X] T036 [P] 在 `circuit-breaker-benchmarks/src/jmh/java/dev/circuitbreaker/benchmarks/AcquireReleaseBenchmark.java` 实现 acquire/release JMH 基准（含 `-gc` 分配计数）
-- [ ] T037 配置性能门控：tryAcquire P50<100ns、release P50<50ns、零分配（CI 回归红线）
+- [X] T037 配置性能门控：tryAcquire P50<100ns、release P50<50ns、零分配（CI 回归红线）
 - [X] T038 跨线程 release 集成测试（并发段求和归零）+ 热更新在途 release 集成测试
 - [X] T039 覆盖率达标（行≥80%/分支≥70%/方法≥85%），补齐缺口
-- [ ] T040 热路径静态门控：禁 Math.exp / 禁对象 new / 禁 synchronized（评审或 ArchUnit 规则）
-- [ ] T041 [P] 更新 `CLAUDE.md`/README 与模块文档（英文标识符/Javadoc，中文设计文档）
-- [ ] T042 运行 quickstart/示例校验端到端可用性
+- [X] T040 热路径静态门控：禁 Math.exp / 禁对象 new / 禁 synchronized（评审或 ArchUnit 规则）
+- [X] T041 [P] 更新 `CLAUDE.md`/README 与模块文档（英文标识符/Javadoc，中文设计文档）
+- [X] T042 运行 quickstart/示例校验端到端可用性
 
 ---
 

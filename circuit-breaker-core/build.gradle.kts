@@ -13,6 +13,7 @@ java {
 dependencies {
     testImplementation("org.junit.jupiter:junit-jupiter:5.10.2")
     testImplementation("org.assertj:assertj-core:3.26.3")
+    testImplementation("com.tngtech.archunit:archunit-junit5:1.3.0")
     testRuntimeOnly("org.junit.platform:junit-platform-launcher:1.10.2")
 }
 
