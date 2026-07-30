@@ -44,13 +44,7 @@ int ORDER = ResourceManager.register("order_create",
 // 业务调用前后
 long token = FlatExecutionEngine.tryAcquire(ORDER);
 if (token < 0) {                       // 负数即阻断
-    switch ((int) token) {
-        case (int) BlockCode.RATE_LIMITER:      throw new RateLimitException();
-        case (int) BlockCode.CIRCUIT_BREAKER:   throw new CircuitBreakerException();
-        case (int) BlockCode.CONCURRENCY:       throw new ConcurrencyLimitException();
-        case (int) BlockCode.SYSTEM_OVERLOAD:   throw new SystemOverloadException();
-        default:                                 throw new IllegalStateException();
-    }
+    throw GovernanceException.throwFor(token);   // 块码 → 类型化异常
 }
 boolean success = false;
 try {
