@@ -2,7 +2,7 @@
 
 > 纳秒级、零堆分配、无锁化的 JVM 流量治理组件库（熔断 / 限流 / 并发控制 / 系统过载保护），对标 Alibaba Sentinel / Hystrix 的核心能力，以极致性能为第一性原理。
 
-[![Java](https://img.shields.io/badge/Java-21%2B-blue)]() [![Gradle](https://img.shields.io/badge/Gradle-9.2.1-02303A)]() [![Tests](https://img.shields.io/badge/tests-35%20passed-brightgreen)]() [![tryAcquire](https://img.shields.io/badge/tryAcquire-~56ns%20%2F%200%20alloc-brightgreen)]()
+[![CI](https://github.com/jonyangx/circuit-breaker/actions/workflows/ci.yml/badge.svg)](https://github.com/jonyangx/circuit-breaker/actions/workflows/ci.yml) [![Java](https://img.shields.io/badge/Java-21%2B-blue)]() [![Gradle](https://img.shields.io/badge/Gradle-9.2.1-02303A)]() [![Tests](https://img.shields.io/badge/tests-37%20passed-brightgreen)]() [![tryAcquire](https://img.shields.io/badge/tryAcquire-~56ns%20%2F%200%20alloc-brightgreen)]()
 
 ## 为什么用它
 
