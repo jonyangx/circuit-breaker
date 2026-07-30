@@ -49,4 +49,18 @@ class LazyTokenBucketTest {
         // only once a full second elapsed does a token appear
         assertThat(LazyTokenBucket.tryAcquire(st, c, 1000L)).isTrue();
     }
+
+    @Test
+    void capacityAboveFieldMaxIsCappedNotCorrupted() {
+        // B1: capacity/qps > 2^22-1 must be capped, not overflow the 22-bit token field into Time.
+        ResourceState st = new ResourceState();
+        ResourceConfig c = cfg(10_000_000, 10_000_000); // > TOKEN_MASK (~4.19M), constructed directly
+        LazyTokenBucket.seed(st, 10_000_000);
+        assertThat(LazyTokenBucket.tryAcquire(st, c, 1_000_000L)).isTrue();
+        long cur = st.bucketState.get();
+        long tok = cur & LazyTokenBucket.TOKEN_MASK;
+        long tLast = cur >>> LazyTokenBucket.TIME_SHIFT;
+        assertThat(tok).isLessThanOrEqualTo(LazyTokenBucket.TOKEN_MASK); // no overflow
+        assertThat(tLast).isEqualTo(1_000_000L);                          // Time field not corrupted
+    }
 }

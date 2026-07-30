@@ -41,6 +41,9 @@ class PolicyBuilderTest {
                 .isInstanceOf(IllegalArgumentException.class);
         assertThatThrownBy(() -> new PolicyBuilder().enableRateLimit(0).build())
                 .isInstanceOf(IllegalArgumentException.class);
+        // qps above the 22-bit token-field capacity must be rejected (would overflow the bucket)
+        assertThatThrownBy(() -> new PolicyBuilder().enableRateLimit(5_000_000L).build())
+                .isInstanceOf(IllegalArgumentException.class);
         assertThatThrownBy(() -> new PolicyBuilder().enableConcurrency(0).openMillis(0).build())
                 .isInstanceOf(IllegalArgumentException.class);
     }

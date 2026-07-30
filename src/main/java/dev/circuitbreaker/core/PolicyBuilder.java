@@ -38,6 +38,10 @@ public final class PolicyBuilder {
         if ((mask & 0x02) != 0 && qps <= 0) {
             throw new IllegalArgumentException("qps must be > 0");
         }
+        if ((mask & 0x02) != 0 && qps > 4_194_303L) {
+            // token bucket's token field is 22 bits (~4.19M); a larger burst would overflow/corrupt it.
+            throw new IllegalArgumentException("qps must be <= 4_194_303 (22-bit token field)");
+        }
         if ((mask & 0x01) != 0) {
             if (errThresholdPpm <= 0 || errThresholdPpm > 1_000_000) {
                 throw new IllegalArgumentException("circuit-breaker errThreshold must be in (0, 1]");

@@ -35,7 +35,9 @@ public final class LazyTokenBucket {
             long tLast = cur >>> TIME_SHIFT;
             long tok = cur & TOKEN_MASK;
             long add = (nowMs - tLast) * qps / 1000L;
-            long nTok = Math.min(capacity, tok + add);
+            // cap at TOKEN_MASK so a capacity > 2^22-1 cannot overflow the 22-bit token field and
+            // corrupt the adjacent Time field on the refill path (seed() already caps; this matches it).
+            long nTok = Math.min(Math.min(capacity, tok + add), TOKEN_MASK);
             if (nTok < 1) {
                 // BR-013: do not advance Time_last; leave state unchanged, interval accumulates.
                 return false;
