@@ -1,0 +1,24 @@
+{
+  "generated_at": "2026-07-30",
+  "topology": {
+    "type": "single",
+    "discovered_at": "2026-07-30",
+    "notes": "单一内聚流量治理库（一个限界上下文），单系统模式；多 Domain 准则不适用"
+  },
+  "last_generation": {
+    "commit_id": "dfead2344d8f73072ba673ce8db61d98573860be",
+    "timestamp": "2026-07-30",
+    "per_doc": {
+      "01_SYSTEM_OVERVIEW": { "commit_id": "dfead2344d8f73072ba673ce8db61d98573860be", "timestamp": "2026-07-30" },
+      "02_CORE_MODULES":    { "commit_id": "dfead2344d8f73072ba673ce8db61d98573860be", "timestamp": "2026-07-30" },
+      "03_API_INTERFACE":   { "commit_id": "dfead2344d8f73072ba673ce8db61d98573860be", "timestamp": "2026-07-30" },
+      "04_DATA_MODEL":      { "commit_id": "dfead2344d8f73072ba673ce8db61d98573860be", "timestamp": "2026-07-30" },
+      "05_CONFIG_MANAGEMENT":{ "commit_id": "dfead2344d8f73072ba673ce8db61d98573860be", "timestamp": "2026-07-30" },
+      "06_UTILS_LIBRARIES": { "commit_id": "dfead2344d8f73072ba673ce8db61d98573860be", "timestamp": "2026-07-30" }
+    }
+  },
+  "drift_status": {
+    "last_check": "2026-07-30",
+    "stale_docs": []
+  }
+}
