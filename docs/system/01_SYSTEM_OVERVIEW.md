@@ -1,7 +1,7 @@
 # 01 系统概览（System Overview）
 
 > 来源：`src/main/java/dev/circuitbreaker/**` · 单一 Domain · Java 21 · Gradle 9.2.1
-> 生成日期：2026-07-30 · 当前 HEAD：`dfead23`
+> 生成日期：2026-07-30（2026-07-31 统计数字刷新） · 当前 HEAD：`47a7fbb`
 
 ## 1. 项目定位
 
@@ -17,7 +17,7 @@
 | 可选依赖 | reactor-core 3.6.10、prometheus simpleclient 0.16.0 | `build.gradle.kts` |
 | 基准 | JMH 1.37 | `build.gradle.kts`（jmh source set） |
 | 测试 | JUnit 5.10.2 + AssertJ 3.26.3 + ArchUnit 1.3.0 | `build.gradle.kts` |
-| 覆盖率 | JaCoCo（LINE 93.4% / BRANCH 84.3% / METHOD 98.6%） | `build.gradle.kts` jacoco |
+| 覆盖率 | JaCoCo（LINE 93.4% / BRANCH 88.1% / METHOD 98.6%） | `build.gradle.kts` jacoco（2026-07-31 实测 `jacocoTestReport.xml`） |
 | CI | GitHub Actions（JDK 21 / Linux） | `.github/workflows/ci.yml` |
 
 ## 3. 架构总览
@@ -70,7 +70,7 @@ flowchart TB
 
 ## 5. 构建与运行
 ```bash
-./gradlew build                    # 编译 + 45 测试
+./gradlew build                    # 编译 + 116 测试（含对抗性套件：启动免疫/低TPS/TPS动态/多服务隔离）
 ./gradlew jacocoTestReport         # 覆盖率
 ./gradlew jmh                      # JMH 性能 + gc profiler
 ```
@@ -81,4 +81,5 @@ flowchart TB
 ## 7. 相关文档
 - 详细模块：`02_CORE_MODULES.md` · API：`03_API_INTERFACE.md` · 数据模型：`04_DATA_MODEL.md`
 - 配置：`05_CONFIG_MANAGEMENT.md` · 工具/可观测：`06_UTILS_LIBRARIES.md`
+- 算法深度剖析（第一性原理/对抗性分析/启动免疫/低TPS/TPS动态/多服务隔离专项）：`07_ALGORITHM_DEEP_DIVE.md`
 - 设计来源：`docs/brd/design.md`、`memory/constitution.md`
