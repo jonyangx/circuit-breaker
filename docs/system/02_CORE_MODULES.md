@@ -42,20 +42,23 @@
 
 ## 3. 四能力（经 bitmask 分派）
 
+> **算法的第一性原理推导、对抗性边界、低 TPS / 启动异常免疫分析，详见 `07_ALGORITHM_DEEP_DIVE.md`。** 本节为模块职责与签名速查。
+
 ### 3.1 core/breaker — EwmaCircuitBreaker
 - `tryAcquire(st, cfg, nowMs)`（`EwmaCircuitBreaker.java:31`）：CLOSED 放行；OPEN 到期→HALF_OPEN 单探路；HALF_OPEN 探路截止→惰性回退 OPEN **自愈**。
-- `release(st, nowMs, ok, cfg, verMatch)`（`:49`）：HALF_OPEN→CLOSED/OPEN；CLOSED→updateEwma+跳闸判定。
-- `transition()` 唯一改 generation；`updateEwma` 代际不匹配重播种。
-- `EwmaAlpha.alpha(dt,τ)` 分段近似（无 Math.exp）。
+- `release(st, nowMs, ok, cfg, verMatch)`（`:55`）：HALF_OPEN→CLOSED/OPEN；CLOSED→updateEwma+跳闸判定；`verMatch=false`（在途 release 跨版本）则**跳过 EWMA 更新**（`FlatExecutionEngine.java:69`）。
+- `transition()`（`:81`）是**唯一**改 generation 的入口；`updateEwma`（`:95`）代际不匹配则丢弃陈旧累积、用当前样本**重播种**（等价"进 CLOSED 清零"，无显式清零 CAS）。
+- `EwmaAlpha.alpha(dt,τ)` 分段近似（无 Math.exp）；退化态：`dt≤0`→`α=0`，`τ≤0`→`α=1`。
+- **跳闸三条件全满足才熔断**（`:68-75`）：`ewGen==genNow ∧ count≥minCalls ∧ ppm≥errThresholdPpm`。`minCalls` 是冷启动保护——启动初期 100% 失败也不跳闸（详见 07 §5.2）。
 
 ### 3.2 core/ratelimit — LazyTokenBucket
-`tryAcquire(st, cfg, nowMs)`（`LazyTokenBucket.java:29`）：高42位Time|低22位Tokens，惰性补 `add=(now-tLast)*qps/1000`，nTok cap TOKEN_MASK，nTok<1 不推进 tLast（抹零）。`seed()` 注册时预充满。
+`tryAcquire(st, cfg, nowMs)`（`LazyTokenBucket.java:29`）：高42位Time|低22位Tokens，惰性补 `add=(now-tLast)*qps/1000`，`nTok=min(capacity, tok+add, TOKEN_MASK)` 双层截断防溢出，`nTok<1` 不推进 tLast（**抹零对策 BR-013**——低 QPS 不饿死）。`seed()`（`:24`）注册时预充满且 `min(capacity, TOKEN_MASK)`。**不分段**（持有全局 QPS 上限不变量）。
 
 ### 3.3 core/concurrency — SegmentedConcurrency
-`tryAcquire(st,cfg)`（`SegmentedConcurrency.java:17`）：TLR probe 路由段，sum≥limit 阻断，否则段+1 返回 bidx；`release(st,bidx)` 同段-1。近似并发（轻微过冲换无锁）。
+`tryAcquire(st,cfg)`（`SegmentedConcurrency.java:17`）：TLR probe 路由段（非 threadId，虚拟线程安全），`sum≥limit` 阻断，否则段+1 返回 bidx；`release(st,bidx)` 据 token 解出的 bidx 回同段-1。近似并发（轻微过冲换无锁；过冲是已知可接受权衡，详见 07 §3.1）。
 
 ### 3.4 core/system — SystemOverload
-`maybeShed()`（`SystemOverload.java:25`）：volatile SHED_PERMILLE 单读 + 概率丢弃。`onCpuSample` 分级（60/80/90→200/500/800‰）+ 迟滞。低频 daemon 探针（`startProbe`，getCpuLoad，1s）。
+`maybeShed()`（`SystemOverload.java:25`）：volatile `SHED_PERMILLE` 单读 + 概率丢弃；`SHED_PERMILLE=0`（默认/探针未启）恒返回 false。`onCpuSample`（`:31`）分级（60/80/90→200/500/800‰）+ 迟滞（进入阈值−退出阈值≈10%）。低频 daemon 探针（`startProbe`，getCpuLoad，1s），`catch(Throwable)` 探针异常永不崩 JVM。
 
 ## 4. 热更新 / 响应式 / 可观测
 
@@ -82,3 +85,4 @@ core 内：FlatExecutionEngine ──> 四能力 + ResourceManager + TokenCodec 
 - `@Contended` 填充未落地（design §6.1 提及）。
 - 并发槽位丢失 release 无自愈（依赖 try/finally 契约）。
 - lastUpdateMs 24 位（≈4.66h）长空闲轻度失真；version 6 位 64 次热更回绕——均记为已知局限。
+- 算法深度分析与对抗性边界清单见 `07_ALGORITHM_DEEP_DIVE.md`。
