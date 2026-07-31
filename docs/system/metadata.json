@@ -20,14 +20,15 @@
   },
   "drift_status": {
     "last_check": "2026-07-31",
+    "check_commit": "cfdfd00",
     "stale_docs": [
       {
-        "doc": "02_CORE_MODULES",
-        "baseline": "dfead2344d8f73072ba673ce8db61d98573860be",
-        "current": "0ee303a",
-        "cause": "手动补充算法深度文档交叉引用（content updated 2026-07-31）"
+        "doc": "01_SYSTEM_OVERVIEW",
+        "severity": "minor",
+        "cause": "测试数量统计过时（45→116）；覆盖率统计为历史值。生产代码 src/main/ 零变更，架构本身无漂移，仅统计数字需刷新。",
+        "stale_lines": ["第20行 覆盖率(LINE 93.4% / BRANCH 84.3% / METHOD 98.6%)", "第73行 '# 编译 + 45 测试'"]
       }
     ],
-    "notes": "02 为手动内容更新（非生成器重跑），已在本次提交同步基线；07 为新增文档已登记。其余文档无漂移。"
+    "notes": "本次检查自最旧基线 dfead23 起，src/main/ 生产代码零变更，所有改动在 src/test/(新增测试) 与 docs/(文档更新)。02/07 基线已在上次提交同步至最新，无漂移；03/04/05/06 因公共API/位布局/配置项/工具库均无变更，无漂移。仅 01 的统计性数字过时(minor)。"
   }
 }
