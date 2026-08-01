@@ -34,7 +34,8 @@ public final class LazyTokenBucket {
             long cur = state.get();
             long tLast = cur >>> TIME_SHIFT;
             long tok = cur & TOKEN_MASK;
-            long add = (nowMs - tLast) * qps / 1000L;
+            long dtMs = nowMs - tLast;
+        long add = (dtMs / 1000L) * qps;
             // cap at TOKEN_MASK so a capacity > 2^22-1 cannot overflow the 22-bit token field and
             // corrupt the adjacent Time field on the refill path (seed() already caps; this matches it).
             long nTok = Math.min(Math.min(capacity, tok + add), TOKEN_MASK);

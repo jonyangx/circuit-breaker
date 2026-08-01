@@ -52,9 +52,13 @@ class TpsDynamicsTokenBucketTest {
         for (int i = 0; i < 1000; i++) {
             LazyTokenBucket.tryAcquire(st, c, 1000L);
         }
-        // After 1ms, exactly 1 token refilled
-        assertThat(LazyTokenBucket.tryAcquire(st, c, 1001L)).isTrue();
-        assertThat(LazyTokenBucket.tryAcquire(st, c, 1001L)).isFalse(); // only 1 token available
+        // After 1000ms, 1000 tokens refilled (qps=1000, dtMs/1000=1)
+        int passed2 = 0;
+        for (int i = 0; i < 1000; i++) {
+            if (LazyTokenBucket.tryAcquire(st, c, 2000L)) passed2++;
+        }
+        assertThat(passed2).isEqualTo(1000);                        // 1s worth refilled
+        assertThat(LazyTokenBucket.tryAcquire(st, c, 2000L)).isFalse(); // no more tokens
     }
 
     /**

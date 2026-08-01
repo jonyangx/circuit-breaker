@@ -25,7 +25,7 @@ class LazyTokenBucketTest {
         }
         assertThat(passed).isEqualTo(1000);            // burst consumed
         assertThat(LazyTokenBucket.tryAcquire(st, c, now)).isFalse(); // over rate → block
-        assertThat(LazyTokenBucket.tryAcquire(st, c, now + 1)).isTrue(); // +1ms → +1 token
+        assertThat(LazyTokenBucket.tryAcquire(st, c, now + 1000)).isTrue(); // +1s → +1000 tokens
     }
 
     @Test

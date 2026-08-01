@@ -1,4 +1,5 @@
 import org.gradle.api.tasks.JavaExec
+import org.gradle.api.tasks.compile.JavaCompile
 
 plugins {
     java
@@ -18,7 +19,16 @@ java {
     }
 }
 
-// JMH benchmark source set must be created BEFORE dependencies reference jmhImplementation.
+// jdk.internal.vm.annotation.Contended lives in java.base; expose at compile and test runtime.
+val contendingJvmArgs = listOf("--add-exports=java.base/jdk.internal.vm.annotation=ALL-UNNAMED")
+
+tasks.withType<JavaCompile>().configureEach {
+    options.compilerArgs.addAll(contendingJvmArgs)
+}
+tasks.withType<Test>().configureEach {
+    jvmArgs(contendingJvmArgs)
+}
+
 sourceSets {
     create("jmh") {
         java.srcDir("src/jmh/java")
@@ -26,10 +36,9 @@ sourceSets {
 }
 
 dependencies {
-    // core: zero third-party (dev.circuitbreaker.core)
-    implementation("io.projectreactor:reactor-core:3.6.10")          // reactive module
-    implementation("io.prometheus:simpleclient:0.16.0")              // observability module
-    "jmhImplementation"("org.openjdk.jmh:jmh-core:1.37")            // benchmarks
+    implementation("io.projectreactor:reactor-core:3.6.10")
+    implementation("io.prometheus:simpleclient:0.16.0")
+    "jmhImplementation"("org.openjdk.jmh:jmh-core:1.37")
     "jmhAnnotationProcessor"("org.openjdk.jmh:jmh-generator-annprocess:1.37")
     testImplementation("org.junit.jupiter:junit-jupiter:5.10.2")
     testImplementation("org.assertj:assertj-core:3.26.3")
@@ -38,7 +47,6 @@ dependencies {
     testRuntimeOnly("org.junit.platform:junit-platform-launcher:1.10.2")
 }
 
-// jmh source set sees main output + all implementation deps (so the benchmark reaches core).
 configurations.named("jmhImplementation").configure {
     extendsFrom(configurations.implementation.get())
 }
@@ -67,4 +75,5 @@ tasks.register<JavaExec>("jmh") {
     classpath = sourceSets.getByName("jmh").runtimeClasspath
     mainClass.set("org.openjdk.jmh.Main")
     args = listOf("-wi", "2", "-i", "3", "-f", "1", "-w", "1s", "-r", "1s", "-tu", "ns", "-prof", "gc")
+    jvmArgs(contendingJvmArgs)
 }

@@ -52,6 +52,9 @@ public final class PolicyBuilder {
             if (minCalls <= 0) {
                 throw new IllegalArgumentException("minimumCalls must be > 0");
             }
+            if (minCalls > 65535) {
+                throw new IllegalArgumentException("minimumCalls must be <= 65535 (16-bit count limit)");
+            }
         }
         if ((mask & 0x04) != 0 && concurrencyLimit <= 0) {
             throw new IllegalArgumentException("concurrencyLimit must be > 0");

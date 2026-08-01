@@ -71,7 +71,7 @@ class FaultInjectionTest {
         }
         assertThat(passed).isEqualTo(1000);
         assertThat(LazyTokenBucket.tryAcquire(st, cfg, 1000L)).isFalse();  // over rate → blocked
-        assertThat(LazyTokenBucket.tryAcquire(st, cfg, 1001L)).isTrue();   // +1ms → +1 token
+        assertThat(LazyTokenBucket.tryAcquire(st, cfg, 2000L)).isTrue();   // +1s → refill (dtMs/1000=1)
     }
 
     // ---- system overload: inject shed level ----
