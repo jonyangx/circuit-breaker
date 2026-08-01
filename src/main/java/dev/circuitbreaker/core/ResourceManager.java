@@ -12,6 +12,7 @@ public final class ResourceManager {
     public static final int MAX_RESOURCES = 1024;
     static final AtomicReferenceArray<ResourceConfig> CONFIGS = new AtomicReferenceArray<>(MAX_RESOURCES);
     static final ResourceState[] STATES = new ResourceState[MAX_RESOURCES];
+    private static int nextIdCounter = 0; // monotonic fast-path cursor (register is synchronized)
 
     private ResourceManager() {}
 
@@ -23,7 +24,7 @@ public final class ResourceManager {
         }
         ResourceState st = new ResourceState();
         STATES[id] = st;
-        if ((config.mask & 0x02) != 0) {
+        if ((config.mask & ResourceConfig.MASK_RATE_LIMIT) != 0) {
             LazyTokenBucket.seed(st, config.capacity); // burst available immediately
         }
         CONFIGS.set(id, config); // publish after state is in place
@@ -31,6 +32,11 @@ public final class ResourceManager {
     }
 
     private static int nextFreeId() {
+        // O(1) fast path: no deregistration exists, so the next slot is the cursor.
+        if (nextIdCounter < MAX_RESOURCES) {
+            return nextIdCounter++;
+        }
+        // Defensive fallback in case deregistration is ever introduced.
         for (int i = 0; i < MAX_RESOURCES; i++) {
             if (STATES[i] == null) {
                 return i;

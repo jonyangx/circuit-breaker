@@ -27,6 +27,7 @@ tasks.withType<JavaCompile>().configureEach {
 }
 tasks.withType<Test>().configureEach {
     jvmArgs(contendingJvmArgs)
+    systemProperty("circuitbreaker.testMode", "true") // allows SystemOverload.setShedPermilleForTest
 }
 
 sourceSets {

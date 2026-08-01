@@ -40,6 +40,10 @@ public final class ResourceState {
     public long passCount() { return passCount.sum(); }
     public long blockCount() { return blockCount.sum(); }
 
+    /**
+     * Time-decay EWMA error rate in parts-per-million.
+     * @return error rate in [0, 1_000_000] ppm (i.e. 0..100%); 0xFFFFF mask = 20-bit field.
+     */
     public int ewmaErrorRatePpm() {
         return (int) (ewmaState.get() & 0xFFFFFL);
     }

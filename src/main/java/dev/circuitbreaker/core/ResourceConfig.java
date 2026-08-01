@@ -5,6 +5,11 @@ package dev.circuitbreaker.core;
  * Hot-update replaces the whole object (version+1); ResourceState is never rebuilt (BR-051).
  */
 public final class ResourceConfig {
+    /** Capability bitmask constants (also the authoritative bit positions for mask). */
+    public static final int MASK_CIRCUIT_BREAKER = 0x01; // bit 0
+    public static final int MASK_RATE_LIMIT      = 0x02; // bit 1
+    public static final int MASK_CONCURRENCY      = 0x04; // bit 2
+
     public final int mask;             // capability bitmask 0x01/0x02/0x04
     public final long qps;             // refill rate in tokens/sec (lazy bucket)
     public final long capacity;        // bucket burst capacity

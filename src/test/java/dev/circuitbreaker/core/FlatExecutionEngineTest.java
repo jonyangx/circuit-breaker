@@ -42,4 +42,21 @@ class FlatExecutionEngineTest {
             dev.circuitbreaker.core.system.SystemOverload.setShedPermilleForTest(0);
         }
     }
+
+    @Test
+    void releaseWithBlockedTokenIsNoOp() {
+        // A blocked token (< 0) carries no resource state; release() must be a no-op,
+        // never touching concurrency/breaker counters (BR-004).
+        int rid = ResourceManager.register("blocked-release",
+                new ResourceConfig(0x04, 0, 0, 0, 1, 1000, 1000, 1_000_000, 1));
+        long beforeSum = ResourceManager.state(rid).sumConcurrency();
+        long beforeBlock = ResourceManager.state(rid).blockCount();
+        // releasing each block code must not change any counter
+        FlatExecutionEngine.release(rid, BlockCode.SYSTEM_OVERLOAD, true);
+        FlatExecutionEngine.release(rid, BlockCode.CIRCUIT_BREAKER, false);
+        FlatExecutionEngine.release(rid, BlockCode.RATE_LIMITER, true);
+        FlatExecutionEngine.release(rid, BlockCode.CONCURRENCY, false);
+        assertThat(ResourceManager.state(rid).sumConcurrency()).isEqualTo(beforeSum);
+        assertThat(ResourceManager.state(rid).blockCount()).isEqualTo(beforeBlock);
+    }
 }

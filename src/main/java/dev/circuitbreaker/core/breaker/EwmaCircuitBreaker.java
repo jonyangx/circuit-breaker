@@ -17,6 +17,7 @@ public final class EwmaCircuitBreaker {
     static final int CLOSED = 0, OPEN = 1, HALF_OPEN = 2;
     private static final int PPM_SUCCESS = 0;
     private static final int PPM_FAIL = 1_000_000;
+    private static final int EW_COUNT_MAX = 0xFFFF; // 16-bit count field saturates (never wraps) — see EW_COUNT_MASK
 
     // ewmaState masks
     private static final long EW_GEN_MASK = 0xFL, EW_LAST_MASK = 0xFFFFFFL, EW_COUNT_MASK = 0xFFFFL, EW_PPM_MASK = 0xFFFFFL;
@@ -103,7 +104,7 @@ public final class EwmaCircuitBreaker {
             } else {
                 long dt = (nowMs - ewLast(cur)) & EW_LAST_MASK;
                 float a = EwmaAlpha.alpha(dt, cfg.ewmaTauMs);
-                int cnt = (int) Math.min(0xFFFFL, ewCount(cur) + 1);
+                int cnt = (int) Math.min(EW_COUNT_MAX, ewCount(cur) + 1); // saturate, never wrap (enables minCalls comparison)
                 int ppm = applyDecay(ewPpm(cur), xPpm, a);
                 next = packEwma(gNow, nowMs, cnt, ppm);
             }
@@ -118,22 +119,31 @@ public final class EwmaCircuitBreaker {
     }
 
     // ---- packers / unpackers ----
+    /** Pack ewmaState: [gen:4 @60-63][lastUpdateMs:24 @36-59][count:16 @20-35][ppm:20 @0-19]. */
     private static long packEwma(int gen, long lastMs, int count, int ppm) {
         return ((gen & EW_GEN_MASK) << EW_GEN_SHIFT)
              | ((lastMs & EW_LAST_MASK) << EW_LAST_SHIFT)
              | ((count & EW_COUNT_MASK) << EW_COUNT_SHIFT)
              | (ppm & EW_PPM_MASK);
     }
+    /** Pack breakerState: [state:2 @62-63][gen:4 @58-61][endTimeMs:58 @0-57]. */
     private static long packBreaker(int state, int gen, long endTime) {
         return ((state & BR_STATE_MASK) << BR_STATE_SHIFT)
              | ((gen & BR_GEN_MASK) << BR_GEN_SHIFT)
              | (endTime & BR_END_MASK);
     }
+    /** Unpack breaker state [62-63]. */
     static int brState(long b) { return (int) (b >>> BR_STATE_SHIFT); }
+    /** Unpack breaker generation [58-61]. */
     static int brGen(long b) { return (int) ((b >>> BR_GEN_SHIFT) & BR_GEN_MASK); }
+    /** Unpack breaker endTime [0-57]. */
     private static long brEnd(long b) { return b & BR_END_MASK; }
+    /** Unpack ewma generation [60-63]. */
     private static int ewGen(long e) { return (int) (e >>> EW_GEN_SHIFT); }
+    /** Unpack ewma lastUpdateMs [36-59]. */
     private static long ewLast(long e) { return (e >>> EW_LAST_SHIFT) & EW_LAST_MASK; }
+    /** Unpack ewma sample count [20-35]. */
     private static int ewCount(long e) { return (int) ((e >>> EW_COUNT_SHIFT) & EW_COUNT_MASK); }
+    /** Unpack ewma error-rate ppm [0-19]. */
     static int ewPpm(long e) { return (int) (e & EW_PPM_MASK); }
 }

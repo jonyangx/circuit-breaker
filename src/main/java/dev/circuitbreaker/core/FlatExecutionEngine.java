@@ -11,7 +11,7 @@ import dev.circuitbreaker.core.system.SystemOverload;
  *
  *  1. system-overload probabilistic short-circuit (BR-040)
  *  2. read CONFIGS/STATES + monotonic now
- *  3. bitmask dispatch: 0x01 breaker / 0x02 limiter / 0x04 concurrency
+ *  3. bitmask dispatch: MASK_CIRCUIT_BREAKER / MASK_RATE_LIMIT / MASK_CONCURRENCY
  *  4. all pass → pack token; any fail → negative block code (BR-004)
  */
 public final class FlatExecutionEngine {
@@ -34,27 +34,28 @@ public final class FlatExecutionEngine {
         ResourceConfig cfg = ResourceManager.CONFIGS.get(resourceId);
         long now = ClockSource.nowRelMs();
 
-        if ((cfg.mask & 0x01) != 0 && !EwmaCircuitBreaker.tryAcquire(st, cfg, now)) {
+        if ((cfg.mask & ResourceConfig.MASK_CIRCUIT_BREAKER) != 0 && !EwmaCircuitBreaker.tryAcquire(st, cfg, now)) {
             st.blockCount.increment();
             return BlockCode.CIRCUIT_BREAKER;
         }
-        if ((cfg.mask & 0x02) != 0 && !LazyTokenBucket.tryAcquire(st, cfg, now)) {
+        if ((cfg.mask & ResourceConfig.MASK_RATE_LIMIT) != 0 && !LazyTokenBucket.tryAcquire(st, cfg, now)) {
             st.blockCount.increment();
             return BlockCode.RATE_LIMITER;
         }
         int bucketIdx = 0;
-        if ((cfg.mask & 0x04) != 0) {
+        if ((cfg.mask & ResourceConfig.MASK_CONCURRENCY) != 0) {
             bucketIdx = SegmentedConcurrency.tryAcquire(st, cfg);
             if (bucketIdx < 0) {
                 st.blockCount.increment();
                 return BlockCode.CONCURRENCY;
             }
         }
-        st.passCount.increment();
+        st.passCount.increment(); // count only after all gates pass + token encoded (no passed-but-uncounted)
         return TokenCodec.encode(now, cfg.version, bucketIdx, cfg.mask);
     }
 
     public static void release(int resourceId, long token, boolean success) {
+        if (token < 0) return; // blocked token carries no resource state to release (BR-004)
         ResourceState st = ResourceManager.STATES[resourceId];
         ResourceConfig cfg = ResourceManager.CONFIGS.get(resourceId);
         long now = ClockSource.nowRelMs();
@@ -62,10 +63,10 @@ public final class FlatExecutionEngine {
         int version = TokenCodec.decodeVersion(token);
         int mask = TokenCodec.decodeMask(token);
 
-        if ((mask & 0x04) != 0) {
+        if ((mask & ResourceConfig.MASK_CONCURRENCY) != 0) {
             SegmentedConcurrency.release(st, bucketIdx); // thread-agnostic rollback (BR-032)
         }
-        if ((mask & 0x01) != 0) {
+        if ((mask & ResourceConfig.MASK_CIRCUIT_BREAKER) != 0) {
             boolean versionMatch = (version == (cfg.version & TokenCodec.VERSION_MASK)); // BR-052
             EwmaCircuitBreaker.release(st, now, success, cfg, versionMatch);
         }

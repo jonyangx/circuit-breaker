@@ -11,8 +11,20 @@ import dev.circuitbreaker.core.ResourceManager;
 public final class ConfigSwapper {
     private ConfigSwapper() {}
 
-    /** Swap in a new immutable config (caller must bump version). */
+    /**
+     * Swap in a new immutable config. Enforces version monotonicity so that in-flight releases
+     * never see a stale-version token accepted as current (BR-050/052).
+     *
+     * @throws IllegalArgumentException if {@code newConfig.version} is not strictly greater than the
+     *         currently published version.
+     */
     public static void swap(int resourceId, ResourceConfig newConfig) {
+        ResourceConfig current = ResourceManager.config(resourceId);
+        if (current != null && newConfig.version <= current.version) {
+            throw new IllegalArgumentException(
+                "new config version " + newConfig.version
+                    + " must be > current version " + current.version);
+        }
         ResourceManager.publishConfig(resourceId, newConfig);
     }
 }

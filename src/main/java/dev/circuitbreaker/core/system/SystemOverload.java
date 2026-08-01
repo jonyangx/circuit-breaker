@@ -18,6 +18,7 @@ public final class SystemOverload {
     private static final double HYST_MARGIN = 10.0; // hysteresis: exit = enter - margin
     private static final AtomicBoolean probeRunning = new AtomicBoolean(false);
     private static volatile boolean stopProbe = false;
+    private static final boolean TEST_MODE = Boolean.getBoolean("circuitbreaker.testMode");
 
     private SystemOverload() {}
 
@@ -53,8 +54,12 @@ public final class SystemOverload {
         };
     }
 
-    /** Test/config hook to force a shed level. */
+    /** Test-only hook to force a shed level; guarded against production misuse (BR-040). */
     public static void setShedPermilleForTest(int permille) {
+        if (!TEST_MODE) {
+            throw new IllegalStateException(
+                "setShedPermilleForTest only allowed in test mode (-Dcircuitbreaker.testMode=true)");
+        }
         SHED_PERMILLE = permille;
         currentLevel = permille;
     }
@@ -65,7 +70,13 @@ public final class SystemOverload {
             return;
         }
         stopProbe = false;
-        Thread t = new Thread(SystemOverload::probeLoop, "circuit-breaker-cpu-probe");
+        Thread t = new Thread(() -> {
+            try {
+                probeLoop();
+            } finally {
+                probeRunning.set(false); // always release the slot on exit
+            }
+        }, "circuit-breaker-cpu-probe");
         t.setDaemon(true);
         t.start();
     }
@@ -90,6 +101,9 @@ public final class SystemOverload {
             } catch (InterruptedException e) {
                 Thread.currentThread().interrupt();
                 return;
+            } catch (VirtualMachineError vme) {
+                // Propagate VM-level errors (OOM, StackOverflow, etc.) to JVM default handler.
+                throw vme;
             } catch (Throwable ignore) {
                 // probe must never crash the guarded JVM
             }
