@@ -15,7 +15,7 @@ class CircuitBreakerCollectorTest {
 
     @Test
     void exposesMonotonicCountersAndErrorGauge() {
-        int rid = ResourceManager.register("obs",
+        int rid = ResourceManager.register(
                 new ResourceConfig(0x02, 1_000_000, 1_000_000, 0, 1, 1000, 1000, 0, 1));
         long t = FlatExecutionEngine.tryAcquire(rid);
         FlatExecutionEngine.release(rid, t, true);

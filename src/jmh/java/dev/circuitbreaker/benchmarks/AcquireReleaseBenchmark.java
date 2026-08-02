@@ -24,7 +24,7 @@ public class AcquireReleaseBenchmark {
 
     @Setup
     public void setup() {
-        resourceId = ResourceManager.register("bench",
+        resourceId = ResourceManager.register(
                 new ResourceConfig(0x07, 1_000_000, 1_000_000, 1_000_000, 1_000, 1000, 1000, 1_000_000, 1));
         // warm the bucket
         long t = FlatExecutionEngine.tryAcquire(resourceId);

@@ -25,7 +25,7 @@ class StartupImmunityTest {
 
     @Test
     void startupAllCapabilitiesPassBeforeAnyTrip() {
-        int rid = ResourceManager.register("startup-all",
+        int rid = ResourceManager.register(
                 new ResourceConfig(0x07, 1_000_000, 1_000_000, 1_000_000, 1_000_000, 1000, 1000, 1_000_000, 1));
         assertThat(FlatExecutionEngine.tryAcquire(rid)).isGreaterThanOrEqualTo(0);
     }
@@ -33,7 +33,7 @@ class StartupImmunityTest {
     @Test
     void startupMinCallsSubMinNeverTripsEvenWithHighErrorRate() {
         // Register with high error threshold but huge minCalls; a few failures must NOT trip.
-        int rid = ResourceManager.register("startup-mincalls",
+        int rid = ResourceManager.register(
                 new ResourceConfig(0x01, 0, 0, 500_000, 100, 1000, 1000, 0, 1));
         long token;
         for (int i = 0; i < 10; i++) {
@@ -53,7 +53,7 @@ class StartupImmunityTest {
         SystemOverload.setShedPermilleForTest(0);
         assertThat(SystemOverload.maybeShed()).isFalse();
 
-        int rid = ResourceManager.register("startup-overload",
+        int rid = ResourceManager.register(
                 new ResourceConfig(0x04, 0, 0, 0, 1, 1000, 1000, 1_000_000, 1));
         assertThat(FlatExecutionEngine.tryAcquire(rid)).isGreaterThanOrEqualTo(0);
     }
@@ -62,7 +62,7 @@ class StartupImmunityTest {
 
     @Test
     void startupStaleVersionReleaseDoesNotCorruptState() {
-        int rid = ResourceManager.register("startup-stale",
+        int rid = ResourceManager.register(
                 new ResourceConfig(0x01, 0, 0, 500_000, 5, 1000, 1000, 0, 1));
         long token = FlatExecutionEngine.tryAcquire(rid);
         assertThat(TokenCodec.decodeVersion(token)).isEqualTo(1);
@@ -95,7 +95,7 @@ class StartupImmunityTest {
 
     @Test
     void startupTokenBucketAvailableImmediately() {
-        int rid = ResourceManager.register("startup-bucket",
+        int rid = ResourceManager.register(
                 new ResourceConfig(0x02, 1000, 1000, 0, 1, 1000, 1000, 0, 1));
         // First acquire must pass (seeded to full capacity)
         assertThat(FlatExecutionEngine.tryAcquire(rid)).isGreaterThanOrEqualTo(0);
@@ -105,7 +105,7 @@ class StartupImmunityTest {
 
     @Test
     void startupAllCapabilitiesTokenCarriesCorrectMask() {
-        int rid = ResourceManager.register("startup-mask",
+        int rid = ResourceManager.register(
                 new ResourceConfig(0x07, 1_000_000, 1_000_000, 1_000_000, 1_000_000, 1000, 1000, 1_000_000, 1));
         long token = FlatExecutionEngine.tryAcquire(rid);
         assertThat(TokenCodec.decodeMask(token)).isEqualTo(0x07);

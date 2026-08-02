@@ -18,7 +18,7 @@ public final class ResourceConfig {
     public final long openMillis;      // breaker open duration (ms)
     public final long ewmaTauMs;       // EWMA decay half-life τ (ms)
     public final int concurrencyLimit; // concurrency cap
-    public final int version;          // config version (low 6 bits enter token)
+    public final int version;          // config version (low 10 bits enter token)
 
     public ResourceConfig(int mask, long qps, long capacity, int errThresholdPpm,
                           int minCalls, long openMillis, long ewmaTauMs,

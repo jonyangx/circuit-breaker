@@ -11,7 +11,12 @@ import java.util.concurrent.atomic.LongAdder;
  * Never rebuilt on rule change; in-flight release always lands on the correct counters.
  *
  * <p>Hot-path atomic fields carry {@link Contended} padding to prevent false sharing.
- * Requires JVM flag {@code --add-exports=jdk.unsupported/jdk.internal.vm.annotation=ALL-UNNAMED}</p>
+ * <b>The JVM ignores {@code @Contended} on user classes unless {@code -XX:-RestrictContended} is set</b>
+ * ({@code RestrictContended} defaults to {@code true}). Measured on JDK 21: without the flag the three
+ * hot AtomicLongs sit at offsets 12/16/20 (4B apart, shared cache lines); with it 280/412/544 (cache-line
+ * isolated). So the embedding JVM MUST launch with both:
+ * {@code --add-exports=java.base/jdk.internal.vm.annotation=ALL-UNNAMED} (compile/reference) and
+ * {@code -XX:-RestrictContended} (runtime layout). Enforced in-tests by {@code ContendedPaddingGuardTest}.</p>
  */
 @Contended
 public final class ResourceState {

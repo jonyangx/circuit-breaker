@@ -6,32 +6,32 @@
     "notes": "单一内聚流量治理库（一个限界上下文），单系统模式；多 Domain 准则不适用"
   },
   "last_generation": {
-    "commit_id": "47a7fbb",
-    "timestamp": "2026-07-31",
+    "commit_id": "bfc8344",
+    "timestamp": "2026-08-02",
     "per_doc": {
       "01_SYSTEM_OVERVIEW": {
         "commit_id": "47a7fbb",
         "timestamp": "2026-07-31"
       },
       "02_CORE_MODULES": {
-        "commit_id": "0ee303a",
-        "timestamp": "2026-07-31"
+        "commit_id": "bfc8344",
+        "timestamp": "2026-08-02"
       },
       "03_API_INTERFACE": {
-        "commit_id": "dfead2344d8f73072ba673ce8db61d98573860be",
-        "timestamp": "2026-07-30"
+        "commit_id": "bfc8344",
+        "timestamp": "2026-08-02"
       },
       "04_DATA_MODEL": {
-        "commit_id": "dfead2344d8f73072ba673ce8db61d98573860be",
-        "timestamp": "2026-07-30"
+        "commit_id": "bfc8344",
+        "timestamp": "2026-08-02"
       },
       "05_CONFIG_MANAGEMENT": {
-        "commit_id": "dfead2344d8f73072ba673ce8db61d98573860be",
-        "timestamp": "2026-07-30"
+        "commit_id": "bfc8344",
+        "timestamp": "2026-08-02"
       },
       "06_UTILS_LIBRARIES": {
-        "commit_id": "dfead2344d8f73072ba673ce8db61d98573860be",
-        "timestamp": "2026-07-30"
+        "commit_id": "bfc8344",
+        "timestamp": "2026-08-02"
       },
       "07_ALGORITHM_DEEP_DIVE": {
         "commit_id": "0ee303a",
@@ -41,14 +41,9 @@
     }
   },
   "drift_status": {
-    "last_check": "2026-08-01",
-    "check_commit": "fb8e39e",
-    "stale_docs": [
-      "02_CORE_MODULES",
-      "03_API_INTERFACE",
-      "04_DATA_MODEL",
-      "05_CONFIG_MANAGEMENT"
-    ],
-    "notes": "fb8e39e 引入 ConfigSwapper.swap 版本校验(可能抛 IAE)、掩码命名常量、SystemOverload TEST_MODE 守卫、nextFreeId O(1) 快路径——涉及核心模块/API/数据模型/配置管理文档"
+    "last_check": "2026-08-02",
+    "check_commit": "bfc8344 (+uncommitted working tree)",
+    "stale_docs": [],
+    "notes": "2026-08-02 增量更新 02/03/04/05/06：同步 PolicySpec 新增 S5(checkMinCallsFloor@184) 致行号位移(check@86,isValid@103,S1@111,S2@126,S3@144,S4@167) 并补 S5 条目；04§8 version 低6位→低10位。01/07 本次未生成（--check 判定无漂移）。"
   }
 }

@@ -17,7 +17,7 @@ public final class ResourceManager {
     private ResourceManager() {}
 
     /** Register a resource; returns its global integer resourceId. */
-    public static synchronized int register(String name, ResourceConfig config) {
+    public static synchronized int register(ResourceConfig config) {
         int id = nextFreeId();
         if (id < 0) {
             throw new IllegalStateException("resource limit reached: " + MAX_RESOURCES);

@@ -24,7 +24,7 @@ class TpsDynamicsEngineTest {
      */
     @Test
     void spikeThenDrainAllCapabilities() {
-        int rid = ResourceManager.register("engine-spike",
+        int rid = ResourceManager.register(
                 new ResourceConfig(0x07, 1_000_000, 1_000_000, 1_000_000, 1_000_000, 1000, 1000, 10, 1));
         ResourceState st = ResourceManager.state(rid);
 
@@ -57,7 +57,7 @@ class TpsDynamicsEngineTest {
      */
     @Test
     void spikeSaturatesThenReleaseFreesForNextSpike() {
-        int rid = ResourceManager.register("engine-conc-spike",
+        int rid = ResourceManager.register(
                 new ResourceConfig(0x04, 0, 0, 0, 1, 1000, 1000, 5, 1));
         ResourceState st = ResourceManager.state(rid);
 
@@ -87,7 +87,7 @@ class TpsDynamicsEngineTest {
      */
     @Test
     void tokenVersionEmbeddedCorrecltyUnderJitter() {
-        int rid = ResourceManager.register("engine-version-jitter",
+        int rid = ResourceManager.register(
                 new ResourceConfig(0x02, 1_000_000, 1_000_000, 0, 1, 1000, 1000, 0, 1));
         long t1 = FlatExecutionEngine.tryAcquire(rid);
         assertThat(TokenCodec.decodeVersion(t1)).isEqualTo(1);

@@ -26,7 +26,7 @@ class EndToEndScenarioTest {
     /** Scenario: a resource with all capabilities gates a stream of calls; every acquire is released. */
     @Test
     void fullLifecycleAllCapabilities() {
-        int rid = ResourceManager.register("e2e-lifecycle",
+        int rid = ResourceManager.register(
                 new ResourceConfig(0x07, 1_000_000, 1_000_000, 1_000_000, 1_000_000, 1000, 1000, 1_000_000, 1));
         ResourceState st = ResourceManager.state(rid);
 
@@ -42,7 +42,7 @@ class EndToEndScenarioTest {
     /** Scenario: saturate the concurrency cap, then drain — the cap holds and frees on release. */
     @Test
     void concurrencyLimitEndToEnd() {
-        int rid = ResourceManager.register("e2e-conc",
+        int rid = ResourceManager.register(
                 new ResourceConfig(0x04, 0, 0, 0, 1, 1000, 1000, 5, 1));
         long[] held = new long[5];
         for (int i = 0; i < 5; i++) {
@@ -60,7 +60,7 @@ class EndToEndScenarioTest {
     /** Scenario: hot-reload swaps config while a token is in flight; the stale release is handled gracefully. */
     @Test
     void hotReloadMidFlight() {
-        int rid = ResourceManager.register("e2e-reload",
+        int rid = ResourceManager.register(
                 new ResourceConfig(0x02, 1_000_000, 1_000_000, 0, 1, 1000, 1000, 0, 1));
         long tokenV1 = FlatExecutionEngine.tryAcquire(rid);
         assertThat(TokenCodec.decodeVersion(tokenV1)).isEqualTo(1);
@@ -77,7 +77,7 @@ class EndToEndScenarioTest {
     /** Scenario: the reactive wrapper releases on both success and error paths. */
     @Test
     void reactivePipelineReleasesOnSuccessAndError() {
-        int rid = ResourceManager.register("e2e-rx",
+        int rid = ResourceManager.register(
                 new ResourceConfig(0x04, 0, 0, 0, 1, 1000, 1000, 1_000_000, 1));
         ResourceState st = ResourceManager.state(rid);
 
@@ -93,7 +93,7 @@ class EndToEndScenarioTest {
     /** Scenario: after traffic, the Prometheus collector exposes monotonic counters + a valid error-rate gauge. */
     @Test
     void metricsExposedAfterTraffic() {
-        int rid = ResourceManager.register("e2e-obs",
+        int rid = ResourceManager.register(
                 new ResourceConfig(0x02, 1_000_000, 1_000_000, 0, 1, 1000, 1000, 0, 1));
         long t = FlatExecutionEngine.tryAcquire(rid);
         FlatExecutionEngine.release(rid, t, true);

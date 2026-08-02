@@ -33,4 +33,12 @@ class GovernanceExceptionTest {
         assertThatThrownBy(() -> GovernanceException.throwFor(0L))
                 .isInstanceOf(IllegalStateException.class);
     }
+
+    @Test
+    void controlFlowExceptionSkipsStackTraceCapture() {
+        // N4: fillInStackTrace is a no-op → no stack trace captured (cheap control-flow throw).
+        GovernanceException e = GovernanceException.forToken(BlockCode.RATE_LIMITER);
+        assertThat(e.getStackTrace()).isEmpty();
+        assertThat(e.getBlockCode()).isEqualTo(BlockCode.RATE_LIMITER); // blockCode still set
+    }
 }

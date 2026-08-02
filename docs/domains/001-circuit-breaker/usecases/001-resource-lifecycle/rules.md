@@ -13,7 +13,7 @@
 |---------|---------|---------|---------|------|
 | BR-001-resource-id-int | 整数 resourceId 寻址 | 资源用全局唯一整数 `resourceId`（0..1023）标识，经 `CONFIGS[]`/`STATES[]` 数组寻址，禁止 Map 查找 | UC-001 | design §3.3 |
 | BR-002-config-state-separation | 配置/状态分离 | `CONFIGS`（不可变、可 RCU 热换）与 `STATES`（长生命周期、规则变更时永不重建）分离；严禁把可变运行时状态耦合进可替换 Config | UC-001, UC-008 | design §3.1 / §8 |
-| BR-003-token-encoding | 64 位 token 位布局 | `[sign:1][time:41][version:6][bucketIdx:4][mask:12]`，符号位恒 0；位宽/偏移为编译期常量 | UC-002, UC-003 | design §3.2.1 |
+| BR-003-token-encoding | 64 位 token 位布局 | `[sign:1][time:37][version:10][bucketIdx:4][mask:12]`，符号位恒 0；位宽/偏移为编译期常量（C2 扩位：version 6→10 / time 41→37，回绕点 1024 次热更） | UC-002, UC-003 | design §3.2.1 |
 | BR-004-block-code-negative | 阻断码全负 | `BLOCK_SYSTEM_OVERLOAD=-1`、`BLOCK_CIRCUIT_BREAKER=-2`、`BLOCK_RATE_LIMITER=-3`、`BLOCK_CONCURRENCY=-4`；`token<0` 即阻断。**块码→类型化异常经统一 `GovernanceException.forToken/throwFor`（base + 4 子类）；reactive `CircuitBreakerOperator` 亦经此映射，不再用独立异常类（代码实现更新，对抗性审查 D4）** | UC-002 | design §4.1 |
 | BR-005-bitmask-dispatch | 位掩码分派 | 按 `config.mask` 依次位与，相应位为 1 调用对应模块，任一失败即返回对应阻断码 | UC-002 | design §4.1 |
 | BR-006-monotonic-nanotime | 单调相对时钟 | 统一 `Time_now = System.nanoTime()/1_000_000 - START`；禁止 `currentTimeMillis()` 做治理判定 | 全部 | design §6.3 |
@@ -32,9 +32,9 @@
 
 ##### BR-003-token-encoding
 * **类型：** 约束（Constraint）
-* **描述：** 64 位 long 位布局自低向高：mask(12)/bucket(4)/version(6)/time(41)/sign(1)。encode/decode 用移位+掩码，无分支、无对象。
+* **描述：** 64 位 long 位布局自低向高：mask(12)/bucket(4)/version(10)/time(37)/sign(1)。encode/decode 用移位+掩码，无分支、无对象。
 * **触发条件：** acquire 打包 token、release 解码。
-* **约束内容：** TIME_MASK 左移 22 后最高落 bit62，符号位天然恒 0；RT 用模减法 `(now - decodeTime) & TIME_MASK`。
+* **约束内容：** TIME_MASK 左移 26 后最高落 bit62，符号位天然恒 0；RT 用模减法 `(now - decodeTime) & TIME_MASK`。
 * **违反后果：** release 跨线程扣错桶、RT 计算错误、阻断判定失效。
 * **关联用例：** UC-002, UC-003
 

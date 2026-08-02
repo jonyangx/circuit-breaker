@@ -62,7 +62,7 @@ static float alpha(long dtMs, double tauMs) {
 * **违反后果：** HALF_OPEN→CLOSED 后旧高错误率立即二次跳闸，熔断器永远出不来。
 
 ### 3. 约束条件
-* **位布局：** ewmaState `[gen:4][lastUpdateMs:24][count:16][ppm:20]`；breakerState `[state:2][gen:4][endTimeMs:58]`。lastUpdateMs 24 位（≈4.66h）足够：更长间隔 u≥8 已饱和。
+* **位布局：** ewmaState `[gen:8][lastUpdateMs:20][count:16][ppm:20]`；breakerState `[state:2][gen:8][endTimeMs:54]`。lastUpdateMs 20 位（≈17.5min）足够：更长间隔 u≥8 已饱和。
 
 ### 4. 成功标准
 * 三态迁移闭环：模拟连续失败→OPEN→到期→HALF_OPEN→探路成功→CLOSED，EWMA 不被旧值二次跳闸。

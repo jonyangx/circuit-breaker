@@ -166,9 +166,9 @@ class TpsDynamicsBreakerTest {
     }
 
     /**
-     * §9.7: Reverse clock — nowMs goes backward within 24-bit mask range.
+     * §9.7: Reverse clock — nowMs goes backward within the 20-bit lastUpdateMs mask range.
      * Modular subtraction: dt = (now - last) & EW_LAST_MASK.
-     * If last=2000, now=1500: (1500-2000) & 0xFFFFFF = -500 & 0xFFFFFF = 16776716.
+     * If last=2000, now=1500: (1500-2000) & 0xFFFFF = -500 & 0xFFFFF = 1048076.
      * This is a HUGE dt → α = 1 → full decay. Returns 0 for success, 1e6 for failure.
      *
      * This means a clock reversal doesn't corrupt EWMA — it just forces a "full reset"
@@ -176,7 +176,7 @@ class TpsDynamicsBreakerTest {
      * for one update).
      */
     @Test
-    void clockReversalWithin24BitDoesNotCorruptEwma() {
+    void clockReversalWithin20BitDoesNotCorruptEwma() {
         ResourceConfig c = cfg(5);
         ResourceState st = new ResourceState();
         EwmaCircuitBreaker.tryAcquire(st, c, 0);
@@ -185,7 +185,7 @@ class TpsDynamicsBreakerTest {
         EwmaCircuitBreaker.release(st, 2000L, false, c, true);
         int ppmBefore = EwmaCircuitBreaker.ewPpm(st.ewmaState.get());
 
-        // "Clock reversal": now=1500 < last=2000. dt = (1500-2000) & 0xFFFFFF = huge.
+        // "Clock reversal": now=1500 < last=2000. dt = (1500-2000) & 0xFFFFF = huge.
         // With dt huge, u ≥ 8 → α = 1 → next sample fully replaces EWMA.
         // A success at this "reversed" time re-seeds ppm to 0.
         EwmaCircuitBreaker.release(st, 1500L, true, c, true);

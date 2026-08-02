@@ -19,14 +19,24 @@ java {
     }
 }
 
-// jdk.internal.vm.annotation.Contended lives in java.base; expose at compile and test runtime.
-val contendingJvmArgs = listOf("--add-exports=java.base/jdk.internal.vm.annotation=ALL-UNNAMED")
+// jdk.internal.vm.annotation.Contended lives in java.base; expose at compile time. At runtime we
+// also force -XX:-RestrictContended so @Contended on app classes is actually honored (by default the
+// JVM ignores it outside the bootstrap loader — measured: offsets go 12/16/20 → 280/412/544), and
+// open jdk.internal.misc so ContendedPaddingGuardTest can read field offsets.
+val compileJvmArgs = listOf(
+    "--add-exports=java.base/jdk.internal.vm.annotation=ALL-UNNAMED",
+    "--add-exports=java.base/jdk.internal.misc=ALL-UNNAMED" // ContendedPaddingGuardTest field-offset reads
+)
+val runtimeJvmArgs = compileJvmArgs + listOf(
+    "-XX:-RestrictContended",                              // honor @Contended on user classes (else inert)
+    "--add-opens=java.base/jdk.internal.misc=ALL-UNNAMED"  // ContendedPaddingGuardTest field-offset reads
+)
 
 tasks.withType<JavaCompile>().configureEach {
-    options.compilerArgs.addAll(contendingJvmArgs)
+    options.compilerArgs.addAll(compileJvmArgs)
 }
 tasks.withType<Test>().configureEach {
-    jvmArgs(contendingJvmArgs)
+    jvmArgs(runtimeJvmArgs)
     systemProperty("circuitbreaker.testMode", "true") // allows SystemOverload.setShedPermilleForTest
 }
 
@@ -76,5 +86,5 @@ tasks.register<JavaExec>("jmh") {
     classpath = sourceSets.getByName("jmh").runtimeClasspath
     mainClass.set("org.openjdk.jmh.Main")
     args = listOf("-wi", "2", "-i", "3", "-f", "1", "-w", "1s", "-r", "1s", "-tu", "ns", "-prof", "gc")
-    jvmArgs(contendingJvmArgs)
+    jvmArgs(runtimeJvmArgs)
 }

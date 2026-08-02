@@ -44,48 +44,50 @@ resourceId ──┬──> volatile ResourceConfig[]   CONFIGS   （可 RCU 热
 | 区域 | 位数 | 说明 |
 |---|---|---|
 | **符号位** | 1 bit (bit 63) | **恒为 0**，为 `token < 0` 判阻断保留（阻断码全为负数） |
-| **时间戳** | 41 bit | 相对单调毫秒时间戳（`nanoTime/1M - START`，约 69 年），用于计算 RT |
-| **配置版本** | 6 bit | acquire 时命中的 `config.version`（低 6 位），release 时校验规则是否已换代 |
+| **时间戳** | 37 bit | 相对单调毫秒时间戳（`nanoTime/1M - START`，约 1.1 年），用于计算 RT |
+| **配置版本** | 10 bit | acquire 时命中的 `config.version`（低 10 位），release 时校验规则是否已换代 |
 | **桶索引** | 4 bit | acquire 时路由到的并发/观测分段索引，release 据此**回到同一段扣减** |
 | **规则掩码** | 12 bit | 命中并生效的能力掩码（Bitmask），用于释放资源时精准回滚 |
 
-> 关键点：**桶索引写进 token**，使 release 不再依赖 `threadId`，彻底解决 Reactor/Netty 下 acquire 与 release 跨线程导致的计数漂移（对应第 9 章卖点）。41 位相对时间戳配合启动归零已足够，符号位独立保留。
+> 关键点：**桶索引写进 token**，使 release 不再依赖 `threadId`，彻底解决 Reactor/Netty 下 acquire 与 release 跨线程导致的计数漂移（对应第 9 章卖点）。37 位相对时间戳仍远超任何 RT（秒~分钟级），符号位独立保留。
+>
+> 【C2 扩位】version 由 v1 的 6 位扩至 **10 位**（热更回绕点 64→1024），向 `time` 借 4 位（41→37）。`mask` 12 位不动（位与判定根基，永不借位）。
 
 #### 3.2.1 精确位偏移与编解码
 
 自低位向高位排布，编解码用移位 + 掩码，无分支、无对象：
 
 ```
- bit:  63    62 ............ 22   21 ...... 16   15 .. 12   11 ......... 0
-      [sign][      time 41       ][ version 6 ][bucket 4][   mask 12    ]
+ bit:  63    62 ........ 26   25 ...... 16   15 .. 12   11 ......... 0
+      [sign][      time 37     ][ version 10][bucket 4][   mask 12    ]
         0        相对毫秒时间戳        config.version   段索引    生效能力掩码
 ```
 
 ```java
-// ---- 位宽（合计 1+41+6+4+12 = 64）----
+// ---- 位宽（合计 1+37+10+4+12 = 64）----
 static final int MASK_BITS    = 12;
 static final int BUCKET_BITS  = 4;
-static final int VERSION_BITS = 6;
-static final int TIME_BITS    = 41;
+static final int VERSION_BITS = 10;
+static final int TIME_BITS    = 37;
 
 // ---- 偏移 ----
 static final int MASK_SHIFT    = 0;
 static final int BUCKET_SHIFT  = 12;
 static final int VERSION_SHIFT = 16;
-static final int TIME_SHIFT    = 22;
+static final int TIME_SHIFT    = 26;
 
 // ---- 掩码 ----
 static final long MASK_MASK    = (1L << MASK_BITS)    - 1;   // 0xFFF
 static final long BUCKET_MASK  = (1L << BUCKET_BITS)  - 1;   // 0xF
-static final long VERSION_MASK = (1L << VERSION_BITS) - 1;   // 0x3F
-static final long TIME_MASK    = (1L << TIME_BITS)    - 1;   // 41 个 1
+static final long VERSION_MASK = (1L << VERSION_BITS) - 1;   // 0x3FF
+static final long TIME_MASK    = (1L << TIME_BITS)    - 1;   // 37 个 1
 
 static long encode(long timeMs, int version, int bucketIdx, int mask) {
     return ((timeMs    & TIME_MASK)    << TIME_SHIFT)
          | ((version   & VERSION_MASK) << VERSION_SHIFT)
          | ((bucketIdx & BUCKET_MASK)  << BUCKET_SHIFT)
          |  (mask      & MASK_MASK);
-    // TIME_MASK 只有 41 位，左移 22 后最高落在 bit62，bit63(符号位) 天然恒为 0
+    // TIME_MASK 只有 37 位，左移 26 后最高落在 bit62，bit63(符号位) 天然恒为 0
 }
 
 static long decodeTime   (long t) { return (t >>> TIME_SHIFT)    & TIME_MASK; }
@@ -140,7 +142,7 @@ long rtMs = (nowRelMs - decodeTime(token)) & TIME_MASK;
 1. 全局过载前置短路（第 10 章），命中直接返回 `BLOCK_SYSTEM_OVERLOAD`。
 2. 请求到达，传入 `resourceId`，读取 `config = CONFIGS[resourceId]`、`state = STATES[resourceId]`。
 3. 提取 `config.mask`，依次进行位与运算（`&`）。若相应位为 `1`，调用对应底层模块，任一失败即返回对应负数阻断码。
-4. 全部通过，打包 `[0][time41][version6][bucketIdx4][mask12]` 生成 `long token` 返回。
+4. 全部通过，打包 `[0][time37][version10][bucketIdx4][mask12]` 生成 `long token` 返回。
 
 **阻断码约定（全负数）**：`BLOCK_SYSTEM_OVERLOAD = -1`、`BLOCK_CIRCUIT_BREAKER = -2`、`BLOCK_RATE_LIMITER = -3`、`BLOCK_CONCURRENCY = -4`。
 
@@ -160,7 +162,7 @@ long rtMs = (nowRelMs - decodeTime(token)) & TIME_MASK;
 
 1. 读取 `bucketState` 并解包为 `Time_last`、`Tokens_current`。
 2. 获取当前单调时间 `Time_now`。
-3. 计算应补充令牌：`Tokens_add = (Time_now - Time_last) × ratePerMs`。
+3. 计算应补充令牌：`Tokens_add = (Time_now - Time_last) × ratePerMs`（实现：`dtMs × qps / 1000`，**毫秒粒度、向下取整**；并对 `dtMs` 取 `max(0, …)` 兜底非单调异常，且在 `dtMs` 大到足以填满 `capacity` 时饱和返回以避免 long 溢出——见 `LazyTokenBucket.refillTokens`）。
 4. 计算最新令牌：`Tokens_new = min(capacity, Tokens_current + Tokens_add)`。
 5. 若 `Tokens_new < 1`，CAS 失败路径直接返回阻断（见 4.2.3 抹零对策），否则 `Tokens_new -= 1`。
 6. 重新打包并 CAS 更新，失败则自旋重试。
@@ -245,14 +247,15 @@ static int applyDecay(int ewmaPpm, int xPpm, float alpha) {
 
 | 高位 → 低位 | 位宽 | 字段 | 说明 |
 |---|---|---|---|
-| bit 60–63 | 4 | `generation` | 熔断状态每迁移一次 +1（循环）；用于惰性作废陈旧累积 |
-| bit 36–59 | 24 | `lastUpdateMs` | 上次更新的相对毫秒时间戳；`Δt = (now − last) & 0xFFFFFF` |
+| bit 56–63 | 8 | `generation` | 熔断状态每迁移一次 +1（循环）；用于惰性作废陈旧累积 |
+| bit 36–55 | 20 | `lastUpdateMs` | 上次更新的相对毫秒时间戳；`Δt = (now − last) & 0xFFFFF` |
 | bit 20–35 | 16 | `count` | 自本代（进 CLOSED）以来样本数，**饱和于 65535** |
 | bit 0–19 | 20 | `ppm` | 错误率定点值，`2^20 = 1_048_576 ≥ 1_000_000` 恰好容纳 |
 
 设计取舍说明：
 
-- **`lastUpdateMs` 取 24 位（≈4.66 小时）**：`Δt` 用模减法计算，只要两次更新间隔 < 4.66h 即精确；更长间隔意味着 `u` 早已 ≥ 8，`α` 直接饱和为 1（EWMA 重播种），间隔具体多长已无意义。故 24 位足够。
+- **`generation` 取 8 位（C3 扩位，原 4 位）**：一轮完整代际（CLOSED→OPEN→HALF_OPEN→CLOSED）至少耗时 ≥ `openMillis`，迁移满一代需 ≥ openMillis；8 位（256 代）下撞 ABA 需 ≥ 256×openMillis 量级的停顿，远超任何 GC STW。
+- **`lastUpdateMs` 取 20 位（≈17.5 分钟）**：`Δt` 用模减法计算，只要两次更新间隔 < 17.5min 即精确；更长间隔意味着 `u` 早已 ≥ 8（8τ，τ=5s 时即 40s），`α` 直接饱和为 1（EWMA 重播种），间隔具体多长已无意义。即便 17.5min 量级回绕，残余误差也被 EWMA 自平滑吸收。
 - **`count` 取 16 位并饱和**：它只服务 `count ≥ minCalls` 这一门槛判断，`minCalls` 通常在数十~数百量级，65535 封顶后判定语义不变，无需更宽。
 - **`ppm` 取 20 位**：`0..1_000_000` 恰好落入 20 位，一位不浪费。
 
@@ -262,13 +265,13 @@ static int applyDecay(int ewmaPpm, int xPpm, float alpha) {
 
 ##### 【细化】`AtomicLong breakerState` 位布局（携带 generation）
 
-熔断状态用独立 `AtomicLong breakerState` 管理，**同样携带 4 位 `generation`**，与 `ewmaState` 的代际对齐：
+熔断状态用独立 `AtomicLong breakerState` 管理，**同样携带 8 位 `generation`**，与 `ewmaState` 的代际对齐：
 
 | 高位 → 低位 | 位宽 | 字段 | 说明 |
 |---|---|---|---|
 | bit 62–63 | 2 | `state` | `00`(CLOSED) / `01`(OPEN) / `10`(HALF_OPEN) |
-| bit 58–61 | 4 | `generation` | 权威代际；每次状态迁移 +1（循环 16） |
-| bit 0–57 | 58 | `endTimeMs` | OPEN 时熔断结束的绝对毫秒时间戳（58 位远超所需） |
+| bit 54–61 | 8 | `generation` | 权威代际；每次状态迁移 +1（循环 256） |
+| bit 0–53 | 54 | `endTimeMs` | OPEN 时熔断结束的绝对毫秒时间戳（54 位 ≈5700 年远超所需） |
 
 `generation` 以 `breakerState` 为权威源，`ewmaState` 镜像之。**「进入 CLOSED 需重置 EWMA」不再靠显式清零 CAS，而是靠代际不匹配触发惰性重播种**——更符合无锁与惰性哲学。
 
@@ -349,7 +352,7 @@ boolean transition(State st, int from, int to, long endTimeMs) {
     for (;;) {
         long cur = st.breakerState.get();
         if (state(cur) != from) return false;                  // 已被他人迁移
-        int  gNext = (gen(cur) + 1) & 0xF;                     // 4 位循环
+        int  gNext = (gen(cur) + 1) & 0xFF;                    // 8 位循环
         long next  = packBreaker(to, gNext, endTimeMs);
         if (st.breakerState.compareAndSet(cur, next)) return true;
     }
@@ -365,7 +368,7 @@ void updateEwma(State st, long nowMs, int xPpm) {
             // 发生过状态迁移：陈旧值作废，重播种（count=1, ppm=xPpm, last=now, gen=gNow）
             next = packEwma(gNow, nowMs, 1, xPpm);
         } else {
-            long dt   = (nowMs - ewmaLast(cur)) & 0xFFFFFF;    // 24 位模减
+            long dt   = (nowMs - ewmaLast(cur)) & 0xFFFFF;     // 20 位模减
             float a   = alpha(dt, cfg.ewmaTauMs);              // 见 4.3.1.1
             int   cnt = Math.min(65535, ewmaCount(cur) + 1);   // 饱和
             int   ppm = applyDecay(ewmaPpm(cur), xPpm, a);
@@ -376,7 +379,7 @@ void updateEwma(State st, long nowMs, int xPpm) {
 }
 ```
 
-**为什么 4 位（16 代）足以防 ABA**：陈旧的 EWMA 更新要「误判为同代」，需要在它「读 `gNow`」到「CAS 写入」这段亚微秒窗口内、`breakerState` 恰好迁移满 16 次回到同一代际值——在真实时钟与状态机节奏下不可能发生。即便极端下真的撞上，后果也仅是**单个样本被错误归代**，会被 EWMA 的后续自平滑吸收，不产生持久错误。空间紧张时可压到 2 位（4 代），代价是 ABA 窗口更窄的保险余量；4 位是舒适选择。
+**为什么 8 位（256 代）足以防 ABA**：陈旧的 EWMA 更新要「误判为同代」，需要在它「读 `gNow`」到「CAS 写入」这段窗口内、`breakerState` 恰好迁移满 256 次回到同一代际值。而一轮完整代际（CLOSED→OPEN→HALF_OPEN→CLOSED）至少耗时 ≥ `openMillis`，迁移满 256 代需 ≥ 256×openMillis 量级的停顿——在真实时钟与状态机节奏下不可能发生（GC STW 是毫秒级）。即便极端下真的撞上，后果也仅是**单个样本被错误归代**，会被 EWMA 的后续自平滑吸收，不产生持久错误。8 位从 `endTimeMs`（54 位仍 ≈5700 年）与 `lastUpdateMs`（20 位，α 在 8τ 已饱和故回绕误差被吸收）各借 4 位，成本几乎为零。（v1 用 4 位/16 代，在 ≥4×openMillis 停顿下即理论撞窗；扩到 8 位是廉价保险。）
 
 > 一句话总结代际机制：**把「两个独立原子量之间的一致性」问题，转化为「更新时校验代际标签」**。迁移只碰 `breakerState`，EWMA 靠标签惰性对齐，全程无跨 `AtomicLong` 的复合原子操作，天然无锁。
 
@@ -392,7 +395,7 @@ void updateEwma(State st, long nowMs, int xPpm) {
 
 ```java
 // 系统初始化阶段：注册资源并获取全局 ID
-int RESOURCE_ORDER_CREATE = ResourceManager.register("order_create",
+int RESOURCE_ORDER_CREATE = ResourceManager.register(
     new PolicyBuilder()
         .enableRateLimit(1000)           // ratePerMs / capacity 由此推导
         .enableCircuitBreaker(0.5f)      // errThreshold
@@ -432,7 +435,7 @@ public void createOrder() {
 
 - **可 stripe（无全局不变量、可交换求和）**：观测计数（`LongAdder`）、并发近似数（4.4）。用 `ThreadLocalRandom` probe 路由，索引写入 token 供 release 回段。
 - **不可 stripe（有全局不变量）**：令牌桶（全局 QPS 上限）、熔断状态机。保留单 `AtomicLong` + 自旋。
-- 对令牌桶/breakerState 的 `AtomicLong` 施加 `@Contended` 填充（`-XX:-RestrictContended`）隔离伪共享，比错误 stripe 更安全。
+- 对令牌桶/breakerState/ewmaState 的 `AtomicLong` 施加 `@Contended` 填充隔离伪共享，比错误 stripe 更安全。**【关键陷阱】`@jdk.internal.vm.annotation.Contended` 在用户类上默认被 JVM 忽略**——必须启动时加 `-XX:-RestrictContended`（`RestrictContended` 默认 true，仅对 bootstrap 类生效）。实测 JDK 21：未加该 flag 时三个热点 long 的字段偏移为 12/16/20（4 字节紧挨、共处 cache line，伪共享照样发生）；加上后为 280/412/544（各占独立 cache line）。故**生产部署的 JVM 必须带 `-XX:-RestrictContended`**，否则本设计的反伪共享填充完全失效（仅 `--add-exports` 让代码能编译/引用注解，并不让 JVM 真正布局填充）。项目构建已为 test/jmh 注入该 flag，并由 `ContendedPaddingGuardTest` 守卫。
 
 ### 6.2 浮点精度与时间流逝抹零
 
@@ -440,11 +443,11 @@ public void createOrder() {
 
 ### 6.3 时间倒退与系统时钟跳变
 
-全面使用 `System.nanoTime() / 1_000_000` 获得相对单调时间戳。启动时记录一次 `START = System.nanoTime() / 1_000_000`，后续统一使用 `Time_now = (System.nanoTime()/1_000_000) - START`，同时缩小数值范围以适配 token 的 41 位时间戳字段。
+全面使用 `System.nanoTime() / 1_000_000` 获得相对单调时间戳。启动时记录一次 `START = System.nanoTime() / 1_000_000`，后续统一使用 `Time_now = (System.nanoTime()/1_000_000) - START`，同时缩小数值范围以适配 token 的 37 位时间戳字段。
 
 ### 6.4 ABA 与在途 release 的版本校验
 
-release 时从 token 解出 `version`，与当前 `CONFIGS[resourceId].version`（低 6 位）比对：
+release 时从 token 解出 `version`，与当前 `CONFIGS[resourceId].version`（低 10 位）比对：
 
 - 版本一致：正常按当前配置上报。
 - 版本已变（热更新发生在 acquire 与 release 之间）：**并发计数照常按 `bucketIdx` 回滚**（作用在稳定的 `STATES` 上，永远正确），EWMA 上报可选择跳过或降权，避免旧阈值语义污染新配置。

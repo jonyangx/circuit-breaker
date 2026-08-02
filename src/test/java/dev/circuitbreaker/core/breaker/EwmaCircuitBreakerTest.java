@@ -88,4 +88,23 @@ class EwmaCircuitBreakerTest {
         EwmaCircuitBreaker.release(st, 10500, true, cfg, true);
         assertThat(EwmaCircuitBreaker.brState(st.breakerState.get())).isEqualTo(EwmaCircuitBreaker.CLOSED);
     }
+
+    @Test
+    void generationIs8BitsAndAlignsAcrossStateLongs() {
+        // C3: generation widened 4→8 bits in BOTH breakerState and ewmaState (they align by value).
+        // 6 full cycles CLOSED→OPEN→HALF_OPEN→CLOSED = 18 transitions ⇒ gen=18. A 4-bit field would
+        // wrap to 18 & 0xF = 2; an 8-bit field holds 18.
+        ResourceState st = new ResourceState();
+        ResourceConfig cfg = breakerCfg();
+        for (int cycle = 0; cycle < 6; cycle++) {
+            long t = 100_000L + cycle * 10_000L;
+            assertThat(EwmaCircuitBreaker.transition(st, EwmaCircuitBreaker.CLOSED, EwmaCircuitBreaker.OPEN, t)).isTrue();
+            assertThat(EwmaCircuitBreaker.transition(st, EwmaCircuitBreaker.OPEN, EwmaCircuitBreaker.HALF_OPEN, t)).isTrue();
+            assertThat(EwmaCircuitBreaker.transition(st, EwmaCircuitBreaker.HALF_OPEN, EwmaCircuitBreaker.CLOSED, 0L)).isTrue();
+        }
+        assertThat(EwmaCircuitBreaker.brGen(st.breakerState.get())).isEqualTo(18);
+        // ewmaState generation must align: a CLOSED release re-seeds ewmaState to the authoritative gen.
+        EwmaCircuitBreaker.release(st, 200_001L, true, cfg, true);
+        assertThat(EwmaCircuitBreaker.ewGen(st.ewmaState.get())).isEqualTo(18);
+    }
 }

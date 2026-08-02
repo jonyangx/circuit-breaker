@@ -39,7 +39,7 @@ v1 范围（经需求拷问确认）：四类治理能力全纳入 + 独立 reac
 ### Entities and Relationships
 
 ```
-ResourceManager ──register(name,policy)──▶ ResourceConfig(immutable, versioned)
+ResourceManager ──register(policy)──▶ ResourceConfig(immutable, versioned)
                                                 │  RCU 热换
                                                 ▼
    CONFIGS[resourceId] (volatile array) ◀──── 原子指针替换

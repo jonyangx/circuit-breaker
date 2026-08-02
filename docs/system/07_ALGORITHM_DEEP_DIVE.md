@@ -60,7 +60,7 @@ ppm 定点（`0..1_000_000`，20 位恰好容纳 `2^20=1_048_576 ≥ 1e6`）让�
 
 **解法**（`EwmaCircuitBreaker.java:81 transition`、`:95 updateEwma`）：把"两者一致性"转化为"更新时校验代际标签"：
 
-- `transition()` 是**唯一**改 `generation` 的入口，每条迁移边 `gen = (gen+1) & 0xF`（4 位，循环 16）。
+- `transition()` 是**唯一**改 `generation` 的入口，每条迁移边 `gen = (gen+1) & 0xFF`（8 位，循环 256；C3 已由 v1 的 4 位/16 代扩位）。
 - `updateEwma()` 先读当前权威代 `gNow = brGen(breakerState)`；若 `ewmaState` 里残留的旧代 ≠ `gNow`，**丢弃陈旧累积、用当前样本重播种**（`count=1, ppm=X_t, last=now, gen=gNow`）——语义等价于"进 CLOSED 清零 EWMA"，但**无需显式清零 CAS**。
 
 **为什么 4 位（16 代）足以防 ABA**：陈旧更新要"误判为同代"，需在"读 gNow → CAS 写入"这段**亚微秒窗口**内 `breakerState` 恰好迁移满 16 次回到同一代际值。真实状态机节奏（每次迁移间隔至少是一次 acquire+release 周期）下不可能发生。即便极端撞上，后果仅是**单个样本被错误归代**，被 EWMA 后续自平滑吸收（见 `design.md` §4.3.3 末段）。
@@ -284,7 +284,7 @@ release 时 `versionMatch = (decodeVersion(token) == (cfg.version & VERSION_MASK
 | 算法 | 对抗场景 | 系统行为 | 保障机制（证据） |
 |---|---|---|---|
 | EWMA | 跨线程并发 release | CAS 自旋，结果收敛 | `updateEwma` for-loop CAS（`:97`） |
-| EWMA | 代际 16 次回绕 | 即便撞上仅单样本误归代，自平滑吸收 | 4 位 gen + 凸组合有界（§1.3/§1.6） |
+| EWMA | 代际 256 次回绕 | 即便撞上仅单样本误归代，自平滑吸收 | 8 位 gen + 凸组合有界（§1.3/§1.6） |
 | EWMA | 丢失探针 | `openMillis` 后惰性自愈为 OPEN | `tryAcquire` HALF_OPEN 分支（`:49`） |
 | EWMA | 首次失败 | ppm 仅 `α·1e6`（小），不飙 100% | α 分段 + count 门槛（§1.5/§5.2） |
 | EWMA | `dtMs≤0`（时钟回退/同瞬） | α=0，不衰减 | `EwmaAlpha.alpha`（`:29`） |

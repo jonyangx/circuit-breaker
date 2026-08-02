@@ -6,7 +6,7 @@
 
 | 模块（包） | 职责 | 关键类 |
 |---|---|---|
-| `core`（共享内核） | 资源寻址、token、时钟、引擎、配置、异常 | `FlatExecutionEngine`、`ResourceManager`、`TokenCodec`、`ResourceConfig/State`、`PolicyBuilder`、`GovernanceException`、`ClockSource`、`BlockCode` |
+| `core`（共享内核） | 资源寻址、token、时钟、引擎、配置、异常 | `FlatExecutionEngine`、`ResourceManager`、`TokenCodec`、`ResourceConfig/State`、`PolicyBuilder`、`PolicySpec`、`GovernanceException`、`ClockSource`、`BlockCode` |
 | `core/breaker` | 时间衰减 EWMA 熔断 + 三态状态机 | `EwmaCircuitBreaker`、`EwmaAlpha` |
 | `core/ratelimit` | 惰性无锁令牌桶 | `LazyTokenBucket` |
 | `core/concurrency` | 分段近似并发 | `SegmentedConcurrency` |
@@ -23,21 +23,24 @@
 - 依赖：`ResourceManager`（CONFIGS/STATES）、`ClockSource`、四能力类。
 
 ### 2.2 ResourceManager（注册 + 数组寻址）
-- `register(String, ResourceConfig): int`（`ResourceManager.java:19`，synchronized）→ 分配 resourceId（0..1023），建 STATES[id]，seed 令牌桶，发布 CONFIGS[id]。
+- `register(ResourceConfig): int`（`ResourceManager.java:20`，synchronized）→ 分配 resourceId（0..1023），建 STATES[id]，seed 令牌桶，发布 CONFIGS[id]。无 `name` 参数（N2：原 `name` 从未被使用，删除以避免无去重机制下的控制面 map 单调增长）。
 - `publishConfig(int, ResourceConfig)`（`:51`）：RCU 受控入口（ConfigSwapper 用）。
 - `CONFIGS`: `AtomicReferenceArray<ResourceConfig>`（安全发布）；`STATES`: `final ResourceState[]`（set-once，跨版本稳定）。
 
 ### 2.3 TokenCodec（64 位 token）
-位布局 `[sign:1][time:41][version:6][bucketIdx:4][mask:12]`；`encode/decode*`（`TokenCodec.java`）；RT 模减法 `rtMs`。无分支、无对象。
+位布局 `[sign:1][time:37][version:10][bucketIdx:4][mask:12]`（version 10 位 / time 37 位——C2 扩位，回绕点 1024 次热更）；`encode/decode*`（`TokenCodec.java`）；RT 模减法 `rtMs`。无分支、无对象。
 
 ### 2.4 ResourceConfig（不可变实体）/ ResourceState（聚合根）
 - `ResourceConfig`: 9 个 `public final` 字段（mask/qps/capacity/errThresholdPpm/minCalls/openMillis/ewmaTauMs/concurrencyLimit/version）。
 - `ResourceState`: 聚合根，`public final` AtomicLong（bucketState/breakerState/ewmaState）+ AtomicInteger[16] concurrency + LongAdder pass/block；`ewmaErrorRatePpm()` 只读访问器。详见 `04_DATA_MODEL.md`。
 
 ### 2.5 PolicyBuilder（策略构建 + 校验）
-链式 `enableRateLimit/enableCircuitBreaker/enableConcurrency/minimumCalls/ewmaHalfLife/openMillis` → `build()`（`PolicyBuilder.java`）做入参校验（errThreshold∈(0,1]、τ>0、qps∈(0,4_194_303]、minCalls>0、concurrency>0、openMillis>0）。
+链式 `enableRateLimit/enableCircuitBreaker/enableConcurrency/minimumCalls/ewmaHalfLife/openMillis` → `build()`（`PolicyBuilder.java:44`）做单字段入参校验（errThreshold∈(0,1]、τ>0、qps∈(0,4_194_303]、minCalls>0、concurrency>0、openMillis>0）。可选 `sla(SlaFacts)`（`:42`）附 SLA 事实，`build()` 末尾经 `PolicySpec`（§2.6）做跨参数 SLA 校验（**opt-in**，不附则跳过）。
 
-### 2.6 GovernanceException（块码→类型化异常）
+### 2.6 PolicySpec（离线跨参数 SLA 校验）
+`check(cfg, SlaFacts): List<Finding>`（`PolicySpec.java:86`）/ `isValid(cfg, sla): boolean`（`:103`）：对照 SLA 事实校验参数间不变量 S1–S5（余量 / Little's Law / 样本可攒齐 / 跳闸余量 / 冷启动地板）。**非热路径**——仅注册/热更新期经 `PolicyBuilder.sla()` opt-in 触发，ERROR 抛 `IllegalArgumentException`、WARN 不阻断。SLA→参数换算与不变量详见 `05_CONFIG_MANAGEMENT.md` §5/§6。
+
+### 2.7 GovernanceException（块码→类型化异常）
 `forToken(long)` 返回 / `throwFor(long)` 抛出（`GovernanceException.java`）；base + 4 子类（RateLimited/CircuitOpen/ConcurrencyLimited/SystemOverloaded），均带 serialVersionUID。
 
 ## 3. 四能力（经 bitmask 分派）
@@ -79,10 +82,11 @@ benchmarks ──> core（JMH）
 core 内：FlatExecutionEngine ──> 四能力 + ResourceManager + TokenCodec + ClockSource
          ConfigSwapper ──> ResourceManager
          ResourceManager ──> LazyTokenBucket（seed）
+         PolicyBuilder ──> PolicySpec（opt-in 校验）
 ```
 
 ## 6. 已知技术债 / 待办
-- `@Contended` 填充未落地（design §6.1 提及）。
-- 并发槽位丢失 release 无自愈（依赖 try/finally 契约）。
-- lastUpdateMs 24 位（≈4.66h）长空闲轻度失真；version 6 位 64 次热更回绕——均记为已知局限。
+- 三个热点 `AtomicLong`（bucketState/breakerState/ewmaState）已 `@Contended` 填充。**注意：用户类的 `@Contended` 默认被 JVM 忽略**，生产 JVM 必须启动带 `-XX:-RestrictContended`（外加 `--add-exports=java.base/jdk.internal.vm.annotation=ALL-UNNAMED`）；否则填充失效、伪共享照旧。构建已为 test/jmh 注入，`ContendedPaddingGuardTest` 守卫。`concurrency[16]` 未填充（已 16 路分段，单槽竞争低，影响有限）。
+- **并发槽位丢失 release 无自愈【硬契约】**：丢失 release 永久泄漏一个并发槽位（熔断侧有自愈，并发侧没有）。业务必须 `try/finally` 成对释放，详见 `03_API_INTERFACE.md` API-003。
+- `ewmaState.lastUpdateMs` 20 位（≈17.5min）长空闲轻度失真（α 在 8τ=40s 已饱和，回绕误差被自平滑吸收）；token `version` 10 位（1024 次热更回绕）；`generation` 8 位（256 代回绕）——均记为已知局限。
 - 算法深度分析与对抗性边界清单见 `07_ALGORITHM_DEEP_DIVE.md`。

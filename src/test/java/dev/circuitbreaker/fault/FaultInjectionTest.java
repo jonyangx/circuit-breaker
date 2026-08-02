@@ -78,7 +78,7 @@ class FaultInjectionTest {
 
     @Test
     void systemOverloadInjectionDropsAllOrNone() {
-        int rid = ResourceManager.register("fault-overload",
+        int rid = ResourceManager.register(
                 new ResourceConfig(0x04, 0, 0, 0, 1, 1000, 1000, 1_000_000, 1));
         SystemOverload.setShedPermilleForTest(1000);               // inject: shed everything
         assertThat(FlatExecutionEngine.tryAcquire(rid)).isEqualTo(BlockCode.SYSTEM_OVERLOAD);
@@ -90,7 +90,7 @@ class FaultInjectionTest {
 
     @Test
     void concurrencySaturationFault() {
-        int rid = ResourceManager.register("fault-conc",
+        int rid = ResourceManager.register(
                 new ResourceConfig(0x04, 0, 0, 0, 1, 1000, 1000, 3, 1));
         long a = FlatExecutionEngine.tryAcquire(rid);
         long b = FlatExecutionEngine.tryAcquire(rid);
@@ -107,7 +107,7 @@ class FaultInjectionTest {
 
     @Test
     void staleVersionReleaseFaultIsGraceful() {
-        int rid = ResourceManager.register("fault-stale",
+        int rid = ResourceManager.register(
                 new ResourceConfig(0x02, 1_000_000, 1_000_000, 0, 1, 1000, 1000, 0, 1));
         long token = FlatExecutionEngine.tryAcquire(rid);
         // inject: config swapped while token in flight

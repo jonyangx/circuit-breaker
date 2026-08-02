@@ -16,7 +16,7 @@ class ConfigSwapperTest {
 
     @Test
     void swapLeavesStateStableAndPublishesNewVersion() {
-        int rid = ResourceManager.register("hot-rcu",
+        int rid = ResourceManager.register(
                 new ResourceConfig(0x02, 1000, 1000, 0, 1, 1000, 1000, 0, 1));
         ResourceState before = ResourceManager.state(rid);
 
@@ -29,7 +29,7 @@ class ConfigSwapperTest {
 
     @Test
     void inFlightReleaseWithStaleVersionIsHandled() {
-        int rid = ResourceManager.register("inflight-rcu",
+        int rid = ResourceManager.register(
                 new ResourceConfig(0x02, 100_000, 100_000, 0, 1, 1000, 1000, 0, 1));
         long token = FlatExecutionEngine.tryAcquire(rid);     // version 1
         assertThat(token).isGreaterThanOrEqualTo(0);
@@ -48,7 +48,7 @@ class ConfigSwapperTest {
 
     @Test
     void swapRejectsNonMonotonicVersion() {
-        int rid = ResourceManager.register("monotonic-rcu",
+        int rid = ResourceManager.register(
                 new ResourceConfig(0x02, 1000, 1000, 0, 1, 1000, 1000, 0, 3));
         // equal version → rejected
         assertThatThrownBy(() -> ConfigSwapper.swap(rid,
@@ -65,7 +65,7 @@ class ConfigSwapperTest {
 
     @Test
     void swapAcceptsHigherVersion() {
-        int rid = ResourceManager.register("monotonic-ok",
+        int rid = ResourceManager.register(
                 new ResourceConfig(0x02, 1000, 1000, 0, 1, 1000, 1000, 0, 1));
         ConfigSwapper.swap(rid, new ResourceConfig(0x02, 2000, 2000, 0, 1, 1000, 1000, 0, 4));
         assertThat(ResourceManager.config(rid).version).isEqualTo(4);

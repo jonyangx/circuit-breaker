@@ -137,11 +137,9 @@ class TpsDynamicsTokenBucketTest {
 
     /**
      * §9.6: Reverse clock — nowMs goes backward.
-     * dt = (now - tLast) could be negative; with long arithmetic and no mask on the
-     * Time field (42 bits, ~139 years), a small backward jump yields a negative dt.
-     * In Java, (negativeLong * qps / 1000) with the seed tLast=0 stays correct because
-     * seed sets tLast=0. But after a real acquire, tLast > 0; a backward clock makes
-     * add negative → nTok could go negative → nTok < 1 → return false (block).
+     * N3 clamps dt = max(0, now - tLast) to 0 on a backward jump, so add = 0 and a drained
+     * bucket blocks (nTok < 1) without corrupting state. Previously the raw negative dt produced
+     * a negative add; both paths block gracefully — N3 just removes the negative arithmetic.
      *
      * This is GRACEFUL: a backward clock blocks rather than corrupting.
      */
@@ -163,7 +161,7 @@ class TpsDynamicsTokenBucketTest {
         long tokAfterDrain = st.bucketState.get() & LazyTokenBucket.TOKEN_MASK;
         assertThat(tokAfterDrain).isZero(); // fully drained
 
-        // Backward clock now: add = (500-1000)*100/1000 = -50 → nTok = min(100, 0 + (-50)) = -50 < 1 → block
+        // Backward clock now: N3 clamps dt = max(0, 500-1000) = 0 → add = 0 → nTok = 0 < 1 → block
         assertThat(LazyTokenBucket.tryAcquire(st, c, 500L)).isFalse();
         // State not corrupted: tLast still 1000, tok still 0
         long tLastAfter = st.bucketState.get() >>> LazyTokenBucket.TIME_SHIFT;

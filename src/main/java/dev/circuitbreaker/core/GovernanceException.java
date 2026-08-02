@@ -30,6 +30,16 @@ public abstract class GovernanceException extends RuntimeException {
         return blockCode;
     }
 
+    /**
+     * N4: control-flow exceptions must not pay for stack-trace capture. These signal a governance
+     * block decision (identifiable via {@link #getBlockCode()}), not an unexpected fault; skipping
+     * {@code fillInStackTrace} removes the dominant cost on high-frequency block→throw paths.
+     */
+    @Override
+    public Throwable fillInStackTrace() {
+        return this;
+    }
+
     /** Returns the typed exception matching the given block code (for reactive Mono.error, etc.). */
     public static GovernanceException forToken(long token) {
         return switch ((int) token) {

@@ -15,7 +15,7 @@ class CircuitBreakerOperatorTest {
 
     @Test
     void successPathReleasesOnReactorThread() {
-        int rid = ResourceManager.register("rx-ok",
+        int rid = ResourceManager.register(
                 new ResourceConfig(0x04, 0, 0, 0, 1, 1000, 1000, 1_000_000, 1));
 
         StepVerifier.create(CircuitBreakerOperator.wrap(rid, () -> Mono.just("value")))
@@ -28,7 +28,7 @@ class CircuitBreakerOperatorTest {
 
     @Test
     void blockedCallPropagatesError() {
-        int rid = ResourceManager.register("rx-block",
+        int rid = ResourceManager.register(
                 new ResourceConfig(0x04, 0, 0, 0, 1, 1000, 1000, 1, 1));
         long held = FlatExecutionEngine.tryAcquire(rid); // exhaust the single slot and hold it
         assertThat(held).isGreaterThanOrEqualTo(0);
@@ -42,7 +42,7 @@ class CircuitBreakerOperatorTest {
 
     @Test
     void errorPathStillReleases() {
-        int rid = ResourceManager.register("rx-err",
+        int rid = ResourceManager.register(
                 new ResourceConfig(0x04, 0, 0, 0, 1, 1000, 1000, 1_000_000, 1));
 
         StepVerifier.create(CircuitBreakerOperator.wrap(rid, () -> Mono.error(new IllegalStateException("boom"))))

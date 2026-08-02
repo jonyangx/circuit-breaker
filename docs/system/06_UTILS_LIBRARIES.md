@@ -1,6 +1,6 @@
 # 06 工具库与可观测性（Utils & Libraries）
 
-> 来源：`src/main/java/dev/circuitbreaker/core/{ClockSource,TokenCodec,BlockCode,GovernanceException}.java`、`observability/`、`reactive/`、`build.gradle.kts`
+> 来源：`src/main/java/dev/circuitbreaker/core/{ClockSource,TokenCodec,BlockCode,GovernanceException,PolicySpec}.java`、`observability/`、`reactive/`、`build.gradle.kts`
 
 ## 1. 核心工具类
 
@@ -16,7 +16,10 @@
 ### 1.4 GovernanceException（`GovernanceException.java`）
 块码→类型化异常唯一映射（base + 4 子类，带 serialVersionUID）；`forToken` 返回 / `throwFor` 抛出。详见 `03_API_INTERFACE.md` §3。
 
-### 1.5 ArchUnit 静态守护（测试侧）
+### 1.5 PolicySpec（`PolicySpec.java`）
+离线 SLA 不变量校验器：`check(cfg, SlaFacts)` / `isValid`（`:86` / `:103`）对照 SLA 事实检查参数间关系（S1–S5，含冷启动地板）。**非热路径**，仅注册/热更新期经 `PolicyBuilder.sla()` opt-in 触发。详见 `05_CONFIG_MANAGEMENT.md` §6。
+
+### 1.6 ArchUnit 静态守护（测试侧）
 `HotPathGuardTest`（`src/test/.../core/HotPathGuardTest.java`）：禁热路径 `Math.exp`（除 EwmaAlpha LUT 初始化）/ `synchronized` 方法（除 ResourceManager.register）。固化零分配/无锁不变量。
 
 ## 2. 可观测性（observability / `CircuitBreakerCollector`）

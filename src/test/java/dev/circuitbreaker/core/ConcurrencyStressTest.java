@@ -19,7 +19,7 @@ class ConcurrencyStressTest {
 
     @Test
     void engineAllCapabilitiesUnderContentionNoDrift() throws InterruptedException {
-        int rid = ResourceManager.register("stress-all",
+        int rid = ResourceManager.register(
                 new ResourceConfig(0x07, 10_000_000, 10_000_000, 1_000_000, 1_000_000, 1000, 1000, 1_000_000, 1));
         ResourceState st = ResourceManager.state(rid);
 
@@ -60,7 +60,7 @@ class ConcurrencyStressTest {
     void breakerStateMachineNeverCorruptsUnderFailureLoad() throws InterruptedException {
         // breaker only (mask 0x01); error threshold reachable but timing-dependent under a tight
         // loop — the invariant we assert is robustness, not the trip itself.
-        int rid = ResourceManager.register("stress-breaker",
+        int rid = ResourceManager.register(
                 new ResourceConfig(0x01, 0, 0, 500_000, 5, 1000, 1000, 0, 1));
         ResourceState st = ResourceManager.state(rid);
 

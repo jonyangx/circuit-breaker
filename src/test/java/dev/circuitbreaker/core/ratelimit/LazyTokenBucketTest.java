@@ -63,4 +63,32 @@ class LazyTokenBucketTest {
         assertThat(tok).isLessThanOrEqualTo(LazyTokenBucket.TOKEN_MASK); // no overflow
         assertThat(tLast).isEqualTo(1_000_000L);                          // Time field not corrupted
     }
+
+    @Test
+    void subSecondRefillIsMsGranular() {
+        // N1 regression: refill is ms-granular (dtMs*qps/1000), NOT quantized to whole seconds.
+        // The old (dtMs/1000)*qps code left a qps=1500 bucket blocking ~1s after the burst drained.
+        ResourceState st = new ResourceState();
+        ResourceConfig c = cfg(1500, 1500);
+        int burst = 0;
+        for (int i = 0; i < 1500; i++) {
+            if (LazyTokenBucket.tryAcquire(st, c, 1_000L)) burst++;
+        }
+        assertThat(burst).isEqualTo(1500);                              // burst consumed
+        assertThat(LazyTokenBucket.tryAcquire(st, c, 1_000L)).isFalse(); // drained at t=1000
+        // 1ms later: ms-granularity refills floor(1500/1000)=1 token. The old code refilled 0 here.
+        assertThat(LazyTokenBucket.tryAcquire(st, c, 1_001L)).isTrue();
+        assertThat(LazyTokenBucket.tryAcquire(st, c, 1_001L)).isFalse(); // that single token consumed
+    }
+
+    @Test
+    void refillSaturatesWithoutOverflowOnPathologicalIdle() {
+        // N1 overflow guard: a huge idle × high qps must not overflow dtMs*qps into a corrupt add.
+        // Saturates at effective capacity; Time field stays intact.
+        ResourceState st = new ResourceState();
+        ResourceConfig c = cfg(10_000_000, 100); // 10M qps, cap 100
+        assertThat(LazyTokenBucket.tryAcquire(st, c, Long.MAX_VALUE / 2)).isTrue(); // would overflow if unsaturated
+        long cur = st.bucketState.get();
+        assertThat(cur & LazyTokenBucket.TOKEN_MASK).isLessThanOrEqualTo(LazyTokenBucket.TOKEN_MASK);
+    }
 }

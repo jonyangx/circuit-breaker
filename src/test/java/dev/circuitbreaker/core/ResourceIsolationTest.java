@@ -30,9 +30,9 @@ class ResourceIsolationTest {
 
     @Test
     void tokenBucketDrainIsPerResource() {
-        int ridA = ResourceManager.register("iso-bucket-a",
+        int ridA = ResourceManager.register(
                 new ResourceConfig(0x02, 10, 10, 0, 1, 1000, 1000, 0, 1));
-        int ridB = ResourceManager.register("iso-bucket-b",
+        int ridB = ResourceManager.register(
                 new ResourceConfig(0x02, 10, 10, 0, 1, 1000, 1000, 0, 1));
 
         // Drain A's bucket completely
@@ -52,9 +52,9 @@ class ResourceIsolationTest {
 
     @Test
     void concurrencySaturationIsPerResource() {
-        int ridA = ResourceManager.register("iso-conc-a",
+        int ridA = ResourceManager.register(
                 new ResourceConfig(0x04, 0, 0, 0, 1, 1000, 1000, 3, 1));
-        int ridB = ResourceManager.register("iso-conc-b",
+        int ridB = ResourceManager.register(
                 new ResourceConfig(0x04, 0, 0, 0, 1, 1000, 1000, 3, 1));
 
         // Saturate A (hold 3 slots)
@@ -81,9 +81,9 @@ class ResourceIsolationTest {
 
     @Test
     void statCountersArePerResource() {
-        int ridA = ResourceManager.register("iso-stats-a",
+        int ridA = ResourceManager.register(
                 new ResourceConfig(0x04, 0, 0, 0, 1, 1000, 1000, 1, 1));
-        int ridB = ResourceManager.register("iso-stats-b",
+        int ridB = ResourceManager.register(
                 new ResourceConfig(0x04, 0, 0, 0, 1, 1000, 1000, 1, 1));
 
         long a1 = FlatExecutionEngine.tryAcquire(ridA); // pass A
@@ -105,9 +105,9 @@ class ResourceIsolationTest {
 
     @Test
     void avalancheScenarioAResourceFailsBStaysHealthy() throws InterruptedException {
-        int ridA = ResourceManager.register("iso-avalanche-a",
+        int ridA = ResourceManager.register(
                 new ResourceConfig(0x01, 0, 0, 500_000, 2, 1000, 1, 0, 1));
-        int ridB = ResourceManager.register("iso-avalanche-b",
+        int ridB = ResourceManager.register(
                 new ResourceConfig(0x07, 1_000_000, 1_000_000, 500_000, 5, 1000, 1000, 100, 1));
 
         // Drive A into failure with τ=1ms (α≈1 at 10ms gaps): 3 spaced failures → count=3≥2,
@@ -138,9 +138,9 @@ class ResourceIsolationTest {
 
     @Test
     void systemOverloadIsTheOnlyCrossResourceCoupling() {
-        int ridA = ResourceManager.register("iso-overload-a",
+        int ridA = ResourceManager.register(
                 new ResourceConfig(0x04, 0, 0, 0, 1, 1000, 1000, 1_000_000, 1));
-        int ridB = ResourceManager.register("iso-overload-b",
+        int ridB = ResourceManager.register(
                 new ResourceConfig(0x04, 0, 0, 0, 1, 1000, 1000, 1_000_000, 1));
 
         // Normal: both pass
@@ -162,9 +162,9 @@ class ResourceIsolationTest {
 
     @Test
     void resourceRegistrationBoundedAndUnique() {
-        int rid1 = ResourceManager.register("iso-unique-1",
+        int rid1 = ResourceManager.register(
                 new ResourceConfig(0x04, 0, 0, 0, 1, 1000, 1000, 1, 1));
-        int rid2 = ResourceManager.register("iso-unique-2",
+        int rid2 = ResourceManager.register(
                 new ResourceConfig(0x04, 0, 0, 0, 1, 1000, 1000, 1, 1));
         assertThat(rid1).isNotEqualTo(rid2);
         assertThat(ResourceManager.state(rid1)).isNotSameAs(ResourceManager.state(rid2));
@@ -174,9 +174,9 @@ class ResourceIsolationTest {
 
     @Test
     void breakerTripAtEngineLevelIsPerResource() throws InterruptedException {
-        int ridA = ResourceManager.register("iso-breaker-a",
+        int ridA = ResourceManager.register(
                 new ResourceConfig(0x01, 0, 0, 500_000, 2, 1000, 1, 0, 1));
-        int ridB = ResourceManager.register("iso-breaker-b",
+        int ridB = ResourceManager.register(
                 new ResourceConfig(0x01, 0, 0, 500_000, 2, 1000, 1, 0, 1));
 
         // Initially both pass

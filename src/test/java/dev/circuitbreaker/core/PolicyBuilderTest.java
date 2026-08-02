@@ -47,4 +47,51 @@ class PolicyBuilderTest {
         assertThatThrownBy(() -> new PolicyBuilder().enableConcurrency(0).openMillis(0).build())
                 .isInstanceOf(IllegalArgumentException.class);
     }
+
+    // ---- opt-in SLA invariant enforcement (PolicySpec integration) ----
+
+    private static final PolicySpec.SlaFacts SLA =
+            new PolicySpec.SlaFacts(2000, 50, 100, 1000);
+
+    @Test
+    void slaCheckPassesForHealthyPolicy() {
+        ResourceConfig c = new PolicyBuilder()
+                .enableRateLimit(1600)
+                .enableCircuitBreaker(0.10f)
+                .minimumCalls(50)
+                .ewmaHalfLife(5_000)
+                .openMillis(10_000)
+                .enableConcurrency(160)
+                .sla(SLA)
+                .build();
+        assertThat(c.qps).isEqualTo(1600);
+    }
+
+    @Test
+    void slaCheckRejectsErrorLevelViolation() {
+        // qps == slaTps → S1 ERROR (no headroom); builder's own checks pass, SLA check rejects.
+        assertThatThrownBy(() -> new PolicyBuilder()
+                .enableRateLimit(2000)
+                .enableCircuitBreaker(0.10f)
+                .minimumCalls(50)
+                .ewmaHalfLife(5_000)
+                .enableConcurrency(160)
+                .sla(SLA)
+                .build())
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("SLA invariants");
+    }
+
+    @Test
+    void slaCheckIsOptInWithoutSlaFacts() {
+        // Same qps==slaTps (S1 ERROR from the SLA view), but sla() NOT called → build succeeds.
+        ResourceConfig c = new PolicyBuilder()
+                .enableRateLimit(2000)
+                .enableCircuitBreaker(0.10f)
+                .minimumCalls(50)
+                .ewmaHalfLife(5_000)
+                .enableConcurrency(160)
+                .build();
+        assertThat(c.qps).isEqualTo(2000);
+    }
 }

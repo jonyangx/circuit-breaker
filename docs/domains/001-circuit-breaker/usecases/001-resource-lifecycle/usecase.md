@@ -15,7 +15,7 @@
 
 ### UC-001 注册资源与治理策略
 
-* **触发器：** 系统初始化阶段，开发者调用 `ResourceManager.register(name, policy)`。
+* **触发器：** 系统初始化阶段，开发者调用 `ResourceManager.register(policy)`。
 * **前置条件：** constitution 已锁定技术栈；资源数 < 1024。
 * **后置条件（成功保证）：** 分配全局唯一整数 `resourceId`；`CONFIGS[resourceId]` 与 `STATES[resourceId]` 就位；`PolicyBuilder` 产物转不可变 `ResourceConfig`（含 version）。
 
@@ -41,7 +41,7 @@
 1. **Engine：** 系统过载前置短路检查（UC-007），命中返回 `BLOCK_SYSTEM_OVERLOAD(-1)`。
 2. **Engine：** 读取 `config=CONFIGS[resourceId]`、`state=STATES[resourceId]`。
 3. **Engine：** 取 `config.mask`，按位与依次判定：0x01 熔断(UC-005)、0x02 限流(UC-004)、0x04 并发(UC-006)；任一失败返回对应负阻断码（-2/-3/-4）。（Use BR-005）
-4. **Engine：** 全部通过，打包 `[0][time41][version6][bucketIdx4][mask12]` 生成 token 返回。（Use BR-003）
+4. **Engine：** 全部通过，打包 `[0][time37][version10][bucketIdx4][mask12]` 生成 token 返回。（Use BR-003）
 
 #### 异常流程
 * **3a. 被熔断：** 返回 `BLOCK_CIRCUIT_BREAKER(-2)`。

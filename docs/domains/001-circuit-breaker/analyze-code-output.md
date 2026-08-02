@@ -21,6 +21,7 @@ src/main/java/dev/circuitbreaker/
 │   ├── ResourceManager       注册 + 数组寻址
 │   ├── FlatExecutionEngine   公共入口 + bitmask 分派
 │   ├── PolicyBuilder         策略构建 + 校验
+│   ├── PolicySpec            离线跨参数 SLA 校验（S1–S5）
 │   ├── GovernanceException   块码→类型化异常（base + 4 子类）
 │   ├── breaker/              EwmaAlpha + EwmaCircuitBreaker（熔断）
 │   ├── ratelimit/            LazyTokenBucket（限流）
@@ -59,6 +60,7 @@ src/main/java/dev/circuitbreaker/
 | `ConfigSwapper.swap` | UC-008 RCU 热更新 | ✅ |
 | `CircuitBreakerOperator.wrap` | UC-009 响应式治理 | ✅（+漂移 D4） |
 | `CircuitBreakerCollector.collect` | UC-010 Prometheus 导出 | ✅ |
+| `PolicyBuilder.sla` / `PolicySpec.check` | UC-011/012 SLA 推导 + 构造期校验 | ✅（增量 D6） |
 
 ## Business Rules（代码 ↔ BRD BR 映射）
 - BR-002 配置/状态分离 ↔ `ResourceManager.CONFIGS`(AtomicReferenceArray)/`STATES`(final[]) ✅
@@ -70,6 +72,7 @@ src/main/java/dev/circuitbreaker/
 - BR-040/041 分级/迟滞 ↔ `SystemOverload.onCpuSample` ✅
 - BR-050/052 RCU/版本校验 ↔ `ConfigSwapper`/`release` ✅
 - BR-060 线程无关 release ↔ `FlatExecutionEngine.release`（token 解码）✅
+- BR-080/081/082 SLA 推导 / S1–S5 不变量 / opt-in 校验 ↔ `PolicySpec` + `PolicyBuilder.sla` ✅（增量 D6）
 
 ## 漂移检测（Drift — 代码已演进，BRD 文档待回填）
 
@@ -80,6 +83,7 @@ src/main/java/dev/circuitbreaker/
 | **D3** | 令牌桶 22 位容量上限：`LazyTokenBucket` nTok cap TOKEN_MASK + PolicyBuilder 拒绝 qps>4,194,303（`932aaab`） | BR-010 未提字段上限 | 回填 BR-010：capacity/qps ≤ 2²²-1 |
 | **D4** | GovernanceException 统一映射：reactive `CircuitBreakerOperator` 经 `GovernanceException.forToken` 抛类型化异常，删除 `CircuitBreakerBlockedException`（`1343fd5`/`679faaf`） | UC-009 用 `CircuitBreakerBlockedException`，UC-002 用裸 switch | 回填 UC-002/UC-009：块码→GovernanceException 子类 |
 | D5 | `ResourceManager.register` 注册时 `LazyTokenBucket.seed` 预充满桶（实现细节） | 未提 | 可选补充（初始突发可用） |
+| **D6** | 工作树变更：`PolicySpec`（S1–S5 离线校验）+ `PolicyBuilder.sla()` opt-in；`LazyTokenBucket` 改 ms 粒度 `dtMs×qps/1000`；`register` 去 name；token C2 扩位 version 6→10 / time 41→37 | PolicySpec 全新无对应 UC/BR；data-model / 001-usecase 已部分同步 | ✅ 已登记：新增 `009-policy-validation`（UC-011/012, BR-080~082）；BR-003 位宽修 37/10；data-model `ratePerMs`→`qps` |
 
 > ✅ **D1–D4 已回填（2026-07-30）**：BR-025（HALF_OPEN 自愈）、BR-007-config-validation（新增）、BR-010（22 位上限）、BR-004（GovernanceException 映射）——见对应 `usecases/*/rules.md`。BRD 历史文档现已与代码一致。
 
@@ -94,7 +98,7 @@ src/main/java/dev/circuitbreaker/
 ## Recommendations（建议执行）
 1. **回填 D1–D4 到 BRD 文档**（usecase 002/003、rules 001/002/003）以恢复 code↔docs 一致。
 2. `@Contended` 填充（design §6.1 提及未落地）作为后续优化。
-3. 版本 6 位回绕（A5）、lastUpdateMs 24 位（A4）记为已知局限。
+3. 版本 10 位回绕（A5）、lastUpdateMs 20 位（A4）记为已知局限。
 
 ## Appendices
 - 术语表：见 `analyze-brd-output.md` Glossary。

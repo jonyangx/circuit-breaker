@@ -7,8 +7,8 @@ import dev.circuitbreaker.core.ResourceState;
  * Time-decay EWMA breaker + 3-state machine + generation (UC-005).
  * BR-020 (time decay), BR-022 (ppm fixed-point), BR-023 (minCalls), BR-024 (generation/ABA), BR-025 (state machine).
  *
- * ewmaState:   [gen:4 @60-63][lastUpdateMs:24 @36-59][count:16 @20-35][ppm:20 @0-19]
- * breakerState:[state:2 @62-63][gen:4 @58-61][endTimeMs:58 @0-57]
+ * ewmaState:   [gen:8 @56-63][lastUpdateMs:20 @36-55][count:16 @20-35][ppm:20 @0-19]
+ * breakerState:[state:2 @62-63][gen:8 @54-61][endTimeMs:54 @0-53]
  *
  * transition() is the ONLY entry that bumps generation; a stale-generation EWMA is
  * lazily re-seeded on the next update (no explicit clear CAS).
@@ -20,12 +20,12 @@ public final class EwmaCircuitBreaker {
     private static final int EW_COUNT_MAX = 0xFFFF; // 16-bit count field saturates (never wraps) — see EW_COUNT_MASK
 
     // ewmaState masks
-    private static final long EW_GEN_MASK = 0xFL, EW_LAST_MASK = 0xFFFFFFL, EW_COUNT_MASK = 0xFFFFL, EW_PPM_MASK = 0xFFFFFL;
-    private static final int EW_GEN_SHIFT = 60, EW_LAST_SHIFT = 36, EW_COUNT_SHIFT = 20;
+    private static final long EW_GEN_MASK = 0xFFL, EW_LAST_MASK = 0xFFFFFL, EW_COUNT_MASK = 0xFFFFL, EW_PPM_MASK = 0xFFFFFL;
+    private static final int EW_GEN_SHIFT = 56, EW_LAST_SHIFT = 36, EW_COUNT_SHIFT = 20;
     // breakerState masks
-    private static final long BR_STATE_MASK = 0x3L, BR_GEN_MASK = 0xFL;
-    private static final long BR_END_MASK = (1L << 58) - 1;
-    private static final int BR_STATE_SHIFT = 62, BR_GEN_SHIFT = 58;
+    private static final long BR_STATE_MASK = 0x3L, BR_GEN_MASK = 0xFFL;
+    private static final long BR_END_MASK = (1L << 54) - 1;
+    private static final int BR_STATE_SHIFT = 62, BR_GEN_SHIFT = 54;
 
     private EwmaCircuitBreaker() {}
 
@@ -85,7 +85,7 @@ public final class EwmaCircuitBreaker {
             if (brState(cur) != from) {
                 return false;
             }
-            int gNext = (brGen(cur) + 1) & 0xF;
+            int gNext = (brGen(cur) + 1) & 0xFF;                    // 8-bit generation (was 4)
             long next = packBreaker(to, gNext, endTimeMs);
             if (st.breakerState.compareAndSet(cur, next)) {
                 return true;
@@ -119,14 +119,14 @@ public final class EwmaCircuitBreaker {
     }
 
     // ---- packers / unpackers ----
-    /** Pack ewmaState: [gen:4 @60-63][lastUpdateMs:24 @36-59][count:16 @20-35][ppm:20 @0-19]. */
+    /** Pack ewmaState: [gen:8 @56-63][lastUpdateMs:20 @36-55][count:16 @20-35][ppm:20 @0-19]. */
     private static long packEwma(int gen, long lastMs, int count, int ppm) {
         return ((gen & EW_GEN_MASK) << EW_GEN_SHIFT)
              | ((lastMs & EW_LAST_MASK) << EW_LAST_SHIFT)
              | ((count & EW_COUNT_MASK) << EW_COUNT_SHIFT)
              | (ppm & EW_PPM_MASK);
     }
-    /** Pack breakerState: [state:2 @62-63][gen:4 @58-61][endTimeMs:58 @0-57]. */
+    /** Pack breakerState: [state:2 @62-63][gen:8 @54-61][endTimeMs:54 @0-53]. */
     private static long packBreaker(int state, int gen, long endTime) {
         return ((state & BR_STATE_MASK) << BR_STATE_SHIFT)
              | ((gen & BR_GEN_MASK) << BR_GEN_SHIFT)
@@ -138,8 +138,8 @@ public final class EwmaCircuitBreaker {
     static int brGen(long b) { return (int) ((b >>> BR_GEN_SHIFT) & BR_GEN_MASK); }
     /** Unpack breaker endTime [0-57]. */
     private static long brEnd(long b) { return b & BR_END_MASK; }
-    /** Unpack ewma generation [60-63]. */
-    private static int ewGen(long e) { return (int) (e >>> EW_GEN_SHIFT); }
+    /** Unpack ewma generation [56-63]. */
+    static int ewGen(long e) { return (int) (e >>> EW_GEN_SHIFT); }
     /** Unpack ewma lastUpdateMs [36-59]. */
     private static long ewLast(long e) { return (e >>> EW_LAST_SHIFT) & EW_LAST_MASK; }
     /** Unpack ewma sample count [20-35]. */

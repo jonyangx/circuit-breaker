@@ -10,7 +10,7 @@ class FlatExecutionEngineCoverageTest {
     @Test
     void acquireReleaseAllCapabilitiesViaEngine() {
         // mask 0x07; breaker threshold unreachable (100%), high rate/concurrency so nothing blocks
-        int rid = ResourceManager.register("all",
+        int rid = ResourceManager.register(
                 new ResourceConfig(0x07, 1_000_000, 1_000_000, 1_000_000, 1_000, 1000, 1000, 1_000_000, 1));
         long token = FlatExecutionEngine.tryAcquire(rid);
         assertThat(token).isGreaterThanOrEqualTo(0);
@@ -25,7 +25,7 @@ class FlatExecutionEngineCoverageTest {
 
     @Test
     void rateLimitOnlyAcquireRelease() {
-        int rid = ResourceManager.register("rl-only",
+        int rid = ResourceManager.register(
                 new ResourceConfig(0x02, 1_000_000, 1_000_000, 0, 1, 1000, 1000, 0, 1));
         long token = FlatExecutionEngine.tryAcquire(rid);
         assertThat(token).isGreaterThanOrEqualTo(0);
