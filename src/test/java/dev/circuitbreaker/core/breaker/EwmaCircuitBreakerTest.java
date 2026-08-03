@@ -107,4 +107,53 @@ class EwmaCircuitBreakerTest {
         EwmaCircuitBreaker.release(st, 200_001L, true, cfg, true);
         assertThat(EwmaCircuitBreaker.ewGen(st.ewmaState.get())).isEqualTo(18);
     }
+
+    /**
+     * Verify that a long idle (past the old 20-bit 17.5min range) followed by a SUCCESS
+     * fully clears a stale error rate, preventing it from causing a false trip.
+     * With 16ms quantization the wrap range is now 2^24 ms (4.66h); the test uses
+     * 2^20 + 2000ms which would have been a dangerous alias in the old 20-bit field
+     * (dt aliased to 0 → α=0, stale ppm frozen). New code: dt ≈ 2^20 ms → u >> 8 → α=1.
+     */
+    @Test
+    void idlePast20BitWrapDoesNotFreezeStalePpm() {
+        ResourceConfig c = breakerCfg();
+        ResourceState st = new ResourceState();
+        EwmaCircuitBreaker.tryAcquire(st, c, 0);
+        // Drive ppm near threshold with 2 failures at τ intervals
+        EwmaCircuitBreaker.release(st, 1000L, false, c, true);
+        EwmaCircuitBreaker.release(st, 2000L, false, c, true);
+        int ppmBeforeIdle = EwmaCircuitBreaker.ewPpm(st.ewmaState.get());
+        assertThat(ppmBeforeIdle).isGreaterThan(500_000); // near threshold
+        // Idle past the old 20-bit field range. With quantization, nowQ = (2^20+2000)>>4 ≈ 65597,
+        // ewLast(prime) = 125 → dtQ ≈ 65472 → dtMs ≈ 2^20 ms → α=1 (full decay).
+        // OLD (20-bit ms field) would compute dt = (2^20+2000 - 2000) & 0xFFFFF = 0 → α=0, freezing stale ppm.
+        long idlePastWrap = (1L << 20) + 2000;
+        EwmaCircuitBreaker.release(st, idlePastWrap, true, c, true);
+        // The success must fully clear the stale ppm to 0, preventing a false trip.
+        assertThat(EwmaCircuitBreaker.ewPpm(st.ewmaState.get())).isZero();
+    }
+
+    /**
+     * Verify that two samples within the same 16ms quantum still have α=0 (no decay),
+     * preserving the micro-burst low-pass damping behavior. With 16ms quantization,
+     * samples at the same wall-clock ms (or within <16ms) map to the same quantized tick.
+     */
+    @Test
+    void sameMsAlphaRemainsZeroWithQuantization() {
+        ResourceConfig c = breakerCfg();
+        ResourceState st = new ResourceState();
+        EwmaCircuitBreaker.tryAcquire(st, c, 0);
+        // First failure at 1000ms: dt from initial lastUpdateMs=0 → real α ≈ 0.63 → ppm jumps
+        EwmaCircuitBreaker.release(st, 1000L, false, c, true);
+        int ppmAfterFirst = EwmaCircuitBreaker.ewPpm(st.ewmaState.get());
+        assertThat(ppmAfterFirst).isGreaterThan(500_000); // real α applied
+        // Second failure at 1007ms (same 16ms quantum as 1000ms: both map to nowQ=62)
+        // → dtQ=0 → α=0 → ppm unchanged (micro-burst damping preserved)
+        EwmaCircuitBreaker.release(st, 1007L, false, c, true);
+        assertThat(EwmaCircuitBreaker.ewPpm(st.ewmaState.get())).isEqualTo(ppmAfterFirst);
+        // Third failure at 1007ms again → still dtQ=0 → α=0 → unchanged
+        EwmaCircuitBreaker.release(st, 1007L, false, c, true);
+        assertThat(EwmaCircuitBreaker.ewPpm(st.ewmaState.get())).isEqualTo(ppmAfterFirst);
+    }
 }

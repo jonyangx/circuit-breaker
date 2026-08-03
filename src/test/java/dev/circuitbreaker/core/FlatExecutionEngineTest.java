@@ -59,4 +59,48 @@ class FlatExecutionEngineTest {
         assertThat(ResourceManager.state(rid).sumConcurrency()).isEqualTo(beforeSum);
         assertThat(ResourceManager.state(rid).blockCount()).isEqualTo(beforeBlock);
     }
+
+    @Test
+    void releaseRejectsInvalidResourceId() {
+        int validRid = ResourceManager.register(
+                new ResourceConfig(0x04, 0, 0, 0, 1, 1000, 1000, 1_000_000, 1));
+        long token = FlatExecutionEngine.tryAcquire(validRid);
+
+        // resourceId out of range should throw IllegalArgumentException
+        assertThatThrownBy(() -> FlatExecutionEngine.release(-1, token, true))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("resourceId out of range");
+
+        // unregistered resourceId (in range but null STATES slot) should throw
+        // Slot 1023 is in range and almost certainly null (sequential allocation tops at <1024)
+        assertThatThrownBy(() -> FlatExecutionEngine.release(1023, token, true))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("unregistered resourceId");
+
+        // Even blocked tokens are validated first (consistent with tryAcquire semantics)
+        assertThatThrownBy(() -> FlatExecutionEngine.release(-1, BlockCode.CONCURRENCY, false))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("resourceId out of range");
+    }
+
+    @Test
+    void releaseDetectsCrossResourceTokenMismatch() {
+        // BR-053: embedded resourceId defends against cross-resource release bugs.
+        int ridA = ResourceManager.register(
+                new ResourceConfig(0x04, 0, 0, 0, 1, 1000, 1000, 100, 1));
+        int ridB = ResourceManager.register(
+                new ResourceConfig(0x04, 0, 0, 0, 1, 1000, 1000, 100, 1));
+
+        long tokenA = FlatExecutionEngine.tryAcquire(ridA);
+
+        // Releasing resource A's token with resourceId=B must fail (would corrupt B's counters)
+        assertThatThrownBy(() -> FlatExecutionEngine.release(ridB, tokenA, true))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("token/resourceId mismatch")
+                .hasMessageContaining("resource " + ridA)
+                .hasMessageContaining("resourceId=" + ridB);
+
+        // Releasing with correct resourceId must succeed
+        FlatExecutionEngine.release(ridA, tokenA, true);
+    }
 }

@@ -18,6 +18,7 @@ public final class SystemOverload {
     private static final double HYST_MARGIN = 10.0; // hysteresis: exit = enter - margin
     private static final AtomicBoolean probeRunning = new AtomicBoolean(false);
     private static volatile boolean stopProbe = false;
+    private static volatile Thread probeThread = null; // BR-043: track thread to prevent dual-probe race
     private static final boolean TEST_MODE = Boolean.getBoolean("circuitbreaker.testMode");
 
     private SystemOverload() {}
@@ -78,12 +79,38 @@ public final class SystemOverload {
             }
         }, "circuit-breaker-cpu-probe");
         t.setDaemon(true);
+        // BR-043: ensure any previous probe thread has fully exited before we start.
+        // Prevents dual-probe race if stopProbe()+startProbe() is called in quick succession.
+        Thread prev = probeThread;
+        probeThread = t;
+        if (prev != null && prev.isAlive()) {
+            try {
+                prev.join(2000); // wait up to 2s for the old thread to exit
+            } catch (InterruptedException ignored) {
+                Thread.currentThread().interrupt();
+            }
+        }
+        // After the old thread's join, its finally block has set probeRunning=false.
+        // Re-arm it so the new thread can run without immediate CAS loss.
+        probeRunning.set(true);
         t.start();
     }
 
     public static void stopProbe() {
         stopProbe = true;
-        probeRunning.set(false);
+        // BR-043: wait for the probe thread to fully exit before returning.
+        // This prevents the dual-probe race where startProbe() is called immediately
+        // after stopProbe() while the old thread is still in probeLoop().
+        Thread t = probeThread;
+        if (t != null) {
+            try {
+                t.join(2000); // wait up to 2s
+            } catch (InterruptedException ignored) {
+                Thread.currentThread().interrupt();
+            }
+        }
+        // After join returns, the thread's finally block has set probeRunning=false,
+        // allowing startProbe() to proceed safely.
     }
 
     private static void probeLoop() {

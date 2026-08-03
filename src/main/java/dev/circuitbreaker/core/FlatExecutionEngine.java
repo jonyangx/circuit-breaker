@@ -51,17 +51,35 @@ public final class FlatExecutionEngine {
             }
         }
         st.passCount.increment(); // count only after all gates pass + token encoded (no passed-but-uncounted)
-        return TokenCodec.encode(now, cfg.version, bucketIdx, cfg.mask);
+        return TokenCodec.encode(now, resourceId, cfg.version, bucketIdx, cfg.mask);
     }
 
     public static void release(int resourceId, long token, boolean success) {
-        if (token < 0) return; // blocked token carries no resource state to release (BR-004)
+        // Defensive validation: check resourceId BEFORE token<0 so caller bugs surface
+        // even for blocked tokens (consistent with tryAcquire).
+        if (resourceId < 0 || resourceId >= ResourceManager.MAX_RESOURCES) {
+            throw new IllegalArgumentException("resourceId out of range: " + resourceId);
+        }
         ResourceState st = ResourceManager.STATES[resourceId];
+        if (st == null) {
+            throw new IllegalArgumentException("unregistered resourceId: " + resourceId);
+        }
+
+        if (token < 0) return; // blocked token carries no resource state to release (BR-004)
         ResourceConfig cfg = ResourceManager.CONFIGS.get(resourceId);
         long now = ClockSource.nowRelMs();
         int bucketIdx = TokenCodec.decodeBucket(token);
         int version = TokenCodec.decodeVersion(token);
         int mask = TokenCodec.decodeMask(token);
+
+        // BR-053: cross-resource-release defense — decode and validate embedded resourceId.
+        int tokenRid = TokenCodec.decodeResourceId(token);
+        if (tokenRid != resourceId) {
+            throw new IllegalArgumentException(
+                "token/resourceId mismatch: token belongs to resource " + tokenRid +
+                " but release() was called with resourceId=" + resourceId +
+                " (possible cross-resource bug in reactive pipeline)");
+        }
 
         if ((mask & ResourceConfig.MASK_CONCURRENCY) != 0) {
             SegmentedConcurrency.release(st, bucketIdx); // thread-agnostic rollback (BR-032)

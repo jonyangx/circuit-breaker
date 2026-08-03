@@ -16,6 +16,10 @@ import java.util.List;
  * <ul>
  *   <li><b>S1 headroom</b>: {@code qps < slaTps} — leave margin so the caller stays below the
  *       downstream's hard ceiling.</li>
+ *   <li><b>S6 rate-limit floor</b>: {@code qps % 1000 == 0} — ms-granularity floor truncation
+ *       can under-deliver for non-multiples (worst ~50% below 1000 QPS at ~1ms cadence).</li>
+ *   <li><b>S7 concurrency overshoot</b>: {@code concurrencyLimit >= 100} — limits below 100 can
+ *       overshoot by up to 16 due to TOCTOU race (documented lock-freedom trade-off).</li>
  *   <li><b>S2 Little's law</b>: {@code concurrencyLimit >= qps × p99RT(s)} — else healthy slow
  *       requests are shed by the concurrency gate.</li>
  *   <li><b>S3 sample accumulation</b>: {@code minCalls / TPS(s) << ewmaTauMs/1000} — samples must
@@ -44,6 +48,10 @@ public final class PolicySpec {
     private static final int MIN_CALLS_WARN = 10;
     /** S5: minCalls cold-start floor — below this is an error (can trip on 1-2 early failures). */
     private static final int MIN_CALLS_ERROR = 3;
+    /** S6: token bucket ms-granularity floor truncation threshold. */
+    private static final int RATE_GRANULARITY_MS = 1000;
+    /** S7: concurrency limit threshold below which TOCTOU overshoot is significant. */
+    private static final int CONCURRENCY_LIMIT_WARN = 100;
 
     /** Observed/contracted facts about the downstream service, supplied by the operator. */
     public static final class SlaFacts {
@@ -89,8 +97,14 @@ public final class PolicySpec {
         boolean cb = (cfg.mask & ResourceConfig.MASK_CIRCUIT_BREAKER) != 0;
         boolean cc = (cfg.mask & ResourceConfig.MASK_CONCURRENCY) != 0;
 
-        if (rl) checkHeadroom(cfg, sla, out);
-        if (cc) checkConcurrency(cfg, sla, out);
+        if (rl) {
+            checkHeadroom(cfg, sla, out);
+            checkRateLimitFloor(cfg, out);
+        }
+        if (cc) {
+            checkConcurrency(cfg, sla, out);
+            checkConcurrencyOvershoot(cfg, out);
+        }
         if (cb) {
             checkSampleAccumulation(cfg, sla, out);
             checkTripMargin(cfg, sla, out);
@@ -122,6 +136,21 @@ public final class PolicySpec {
         }
     }
 
+    // ---- S6: token bucket ms-granularity floor truncation (BR-013) ----
+    private static void checkRateLimitFloor(ResourceConfig cfg, List<Finding> out) {
+        if (cfg.qps % RATE_GRANULARITY_MS != 0) {
+            long effective = (cfg.qps / RATE_GRANULARITY_MS) * RATE_GRANULARITY_MS;
+            double lossPct = ((cfg.qps - effective) * 100.0) / cfg.qps;
+            out.add(new Finding(Level.WARN, "S6",
+                "qps=" + cfg.qps + " will deliver ~" + effective + "/s (" + lossPct + "% under) " +
+                "due to ms-floor truncation; effective rate = floor(qps/1000)*1000, worst-case at ~1ms cadence. " +
+                "Configure qps as a multiple of 1000 to avoid this."));
+        } else {
+            out.add(new Finding(Level.OK, "S6",
+                "qps=" + cfg.qps + " is a multiple of 1000; ms-floor truncation delivers exact rate"));
+        }
+    }
+
     // ---- S2: concurrency vs Little's law (qps × RT) ----
     private static void checkConcurrency(ResourceConfig cfg, SlaFacts sla, List<Finding> out) {
         long needAvg = Math.ceilDiv(cfg.qps * sla.avgRtMs, 1_000L);
@@ -137,6 +166,22 @@ public final class PolicySpec {
         } else {
             out.add(new Finding(Level.OK, "S2",
                 "concurrencyLimit=" + cfg.concurrencyLimit + " >= qps×p99RT=" + needP99));
+        }
+    }
+
+    // ---- S7: concurrency overshoot due to TOCTOU race (documented lock-freedom trade-off) ----
+    private static void checkConcurrencyOvershoot(ResourceConfig cfg, List<Finding> out) {
+        if (cfg.concurrencyLimit < CONCURRENCY_LIMIT_WARN) {
+            double overshootPct = (16.0 * 100.0) / cfg.concurrencyLimit;
+            long actualMax = cfg.concurrencyLimit + ResourceState.SEG;
+            out.add(new Finding(Level.WARN, "S7",
+                "concurrencyLimit=" + cfg.concurrencyLimit + " can overshoot by up to " + ResourceState.SEG +
+                " due to TOCTOU race; actual max ≈ " + actualMax + " (" + overshootPct + "% over limit). " +
+                "Raise the limit or accept this lock-freedom trade-off (segmented approximation, BR-030)."));
+        } else {
+            out.add(new Finding(Level.OK, "S7",
+                "concurrencyLimit=" + cfg.concurrencyLimit + " >= 100; TOCTOU overshoot ≤ " + ResourceState.SEG +
+                " (" + (ResourceState.SEG * 100.0 / cfg.concurrencyLimit) + "% of limit) is acceptable"));
         }
     }
 

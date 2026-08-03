@@ -8,6 +8,10 @@ import dev.circuitbreaker.core.ResourceState;
  * BR-020 (time decay), BR-022 (ppm fixed-point), BR-023 (minCalls), BR-024 (generation/ABA), BR-025 (state machine).
  *
  * ewmaState:   [gen:8 @56-63][lastUpdateMs:20 @36-55][count:16 @20-35][ppm:20 @0-19]
+ *   — lastUpdateMs is stored at 16ms quantum (nowMs>>4), extending the 20-bit field's wrap
+ *     horizon from 17.5min to 2^24 ms ≈ 4.66h. A 20-bit raw ms field would alias gaps ≥17.5min
+ *     to dt≈0, freezing stale error rate that can false-trip; quantization (16ms/tick) makes the
+ *     bad window [k·4.66h, k·4.66h+8τ) with τ≥1s → probability negligible.
  * breakerState:[state:2 @62-63][gen:8 @54-61][endTimeMs:54 @0-53]
  *
  * transition() is the ONLY entry that bumps generation; a stale-generation EWMA is
@@ -18,6 +22,8 @@ public final class EwmaCircuitBreaker {
     private static final int PPM_SUCCESS = 0;
     private static final int PPM_FAIL = 1_000_000;
     private static final int EW_COUNT_MAX = 0xFFFF; // 16-bit count field saturates (never wraps) — see EW_COUNT_MASK
+    /** lastUpdateMs quantum: store nowMs>>4 so a 20-bit field spans 2^24 ms (4.66h) not 17.5min. */
+    private static final int EW_LAST_Q_SHIFT = 4; // 16 ms per stored tick
 
     // ewmaState masks
     private static final long EW_GEN_MASK = 0xFFL, EW_LAST_MASK = 0xFFFFFL, EW_COUNT_MASK = 0xFFFFL, EW_PPM_MASK = 0xFFFFFL;
@@ -94,19 +100,21 @@ public final class EwmaCircuitBreaker {
     }
 
     static void updateEwma(ResourceState st, long nowMs, int xPpm, ResourceConfig cfg) {
+        long nowQ = nowMs >> EW_LAST_Q_SHIFT; // 16ms-quantized reference (extends wrap to 2^24 ms ≈ 4.66h)
         int gNow = brGen(st.breakerState.get());
         for (;;) {
             long cur = st.ewmaState.get();
             long next;
             if (ewGen(cur) != gNow) {
                 // stale generation (a transition happened) → re-seed (equivalent to "clear on entering CLOSED").
-                next = packEwma(gNow, nowMs, 1, xPpm);
+                next = packEwma(gNow, nowQ, 1, xPpm);
             } else {
-                long dt = (nowMs - ewLast(cur)) & EW_LAST_MASK;
-                float a = EwmaAlpha.alpha(dt, cfg.ewmaTauMs);
+                long dtQ = (nowQ - ewLast(cur)) & EW_LAST_MASK; // 20-bit modular, 16ms units
+                long dtMs = dtQ << EW_LAST_Q_SHIFT;           // back to ms for α computation
+                float a = EwmaAlpha.alpha(dtMs, cfg.ewmaTauMs);
                 int cnt = (int) Math.min(EW_COUNT_MAX, ewCount(cur) + 1); // saturate, never wrap (enables minCalls comparison)
                 int ppm = applyDecay(ewPpm(cur), xPpm, a);
-                next = packEwma(gNow, nowMs, cnt, ppm);
+                next = packEwma(gNow, nowQ, cnt, ppm);
             }
             if (st.ewmaState.compareAndSet(cur, next)) {
                 return;
@@ -119,10 +127,10 @@ public final class EwmaCircuitBreaker {
     }
 
     // ---- packers / unpackers ----
-    /** Pack ewmaState: [gen:8 @56-63][lastUpdateMs:20 @36-55][count:16 @20-35][ppm:20 @0-19]. */
-    private static long packEwma(int gen, long lastMs, int count, int ppm) {
+    /** Pack ewmaState: [gen:8 @56-63][lastUpdateMs:20 @36-55, 16ms quantum][count:16 @20-35][ppm:20 @0-19]. */
+    private static long packEwma(int gen, long lastQ, int count, int ppm) {
         return ((gen & EW_GEN_MASK) << EW_GEN_SHIFT)
-             | ((lastMs & EW_LAST_MASK) << EW_LAST_SHIFT)
+             | ((lastQ & EW_LAST_MASK) << EW_LAST_SHIFT)
              | ((count & EW_COUNT_MASK) << EW_COUNT_SHIFT)
              | (ppm & EW_PPM_MASK);
     }
@@ -140,7 +148,7 @@ public final class EwmaCircuitBreaker {
     private static long brEnd(long b) { return b & BR_END_MASK; }
     /** Unpack ewma generation [56-63]. */
     static int ewGen(long e) { return (int) (e >>> EW_GEN_SHIFT); }
-    /** Unpack ewma lastUpdateMs [36-59]. */
+    /** Unpack ewma lastUpdateMs [36-55] (16ms quantum; multiply by 16 for absolute ms). */
     private static long ewLast(long e) { return (e >>> EW_LAST_SHIFT) & EW_LAST_MASK; }
     /** Unpack ewma sample count [20-35]. */
     private static int ewCount(long e) { return (int) ((e >>> EW_COUNT_SHIFT) & EW_COUNT_MASK); }

@@ -51,8 +51,8 @@ class PolicySpecTest {
 
     @Test
     void orderApiExampleFixedPassesClean() {
-        // Raise concurrency to qps×p99RT (=160) → all OK.
-        ResourceConfig c = cfg(ALL, 1600, 100_000, 50, 5_000, 160);
+        // Use qps=1000 (multiple of 1000 → S6 OK) with concurrency 160 ≥ qps×p99RT=100 → all OK.
+        ResourceConfig c = cfg(ALL, 1000, 100_000, 50, 5_000, 160);
         List<PolicySpec.Finding> fs = PolicySpec.check(c, ORDER_SLA);
         assertThat(fs).allMatch(f -> f.level == OK);
     }
@@ -85,10 +85,10 @@ class PolicySpecTest {
 
     @Test
     void disabledGatesAreSkipped() {
-        // Rate-limit only: S2/S3/S4 must be absent.
+        // Rate-limit only: S2/S3/S4 must be absent. S6 fires for qps=1600 (not multiple of 1000).
         ResourceConfig c = cfg(ResourceConfig.MASK_RATE_LIMIT, 1600, 0, 1, 5_000, 0);
         List<PolicySpec.Finding> fs = PolicySpec.check(c, ORDER_SLA);
-        assertThat(fs).extracting(f -> f.rule).containsExactly("S1");
+        assertThat(fs).extracting(f -> f.rule).containsExactlyInAnyOrder("S1", "S6");
     }
 
     @Test
@@ -114,5 +114,39 @@ class PolicySpecTest {
         // minCalls=50 → S5 OK
         ResourceConfig ok = cfg(ALL, 1600, 100_000, 50, 5_000, 160);
         assertThat(levelOf(PolicySpec.check(ok, ORDER_SLA), "S5")).isEqualTo(OK);
+    }
+
+    @Test
+    void s6RateLimitFloorWarnsOnNonMultiplesOf1000() {
+        // qps=1500 → effective rate ≈ 1000/s (worst-case at ~1ms cadence) → S6 WARN
+        ResourceConfig c = cfg(ResourceConfig.MASK_RATE_LIMIT, 1500, 0, 1, 5_000, 0);
+        List<PolicySpec.Finding> fs = PolicySpec.check(c, ORDER_SLA);
+        assertThat(levelOf(fs, "S6")).isEqualTo(WARN);
+        assertThat(PolicySpec.isValid(c, ORDER_SLA)).isTrue(); // WARN tolerated
+    }
+
+    @Test
+    void s6RateLimitFloorOkOnMultiplesOf1000() {
+        // qps=1000 → exact rate delivery → S6 OK
+        ResourceConfig c = cfg(ResourceConfig.MASK_RATE_LIMIT, 1000, 0, 1, 5_000, 0);
+        List<PolicySpec.Finding> fs = PolicySpec.check(c, ORDER_SLA);
+        assertThat(levelOf(fs, "S6")).isEqualTo(OK);
+    }
+
+    @Test
+    void s7ConcurrencyOvershootWarnsBelow100() {
+        // concurrencyLimit=50 → actual max ≈ 66 (50+16, 32% over) → S7 WARN
+        ResourceConfig c = cfg(ResourceConfig.MASK_CONCURRENCY, 0, 0, 1, 5_000, 50);
+        List<PolicySpec.Finding> fs = PolicySpec.check(c, ORDER_SLA);
+        assertThat(levelOf(fs, "S7")).isEqualTo(WARN);
+        assertThat(PolicySpec.isValid(c, ORDER_SLA)).isTrue(); // WARN tolerated
+    }
+
+    @Test
+    void s7ConcurrencyOvershootOkAbove100() {
+        // concurrencyLimit=150 → actual max ≈ 166 (150+16, 10.7% over) → S7 OK
+        ResourceConfig c = cfg(ResourceConfig.MASK_CONCURRENCY, 0, 0, 1, 5_000, 150);
+        List<PolicySpec.Finding> fs = PolicySpec.check(c, ORDER_SLA);
+        assertThat(levelOf(fs, "S7")).isEqualTo(OK);
     }
 }

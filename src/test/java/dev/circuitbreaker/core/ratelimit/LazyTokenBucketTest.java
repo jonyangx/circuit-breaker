@@ -91,4 +91,34 @@ class LazyTokenBucketTest {
         long cur = st.bucketState.get();
         assertThat(cur & LazyTokenBucket.TOKEN_MASK).isLessThanOrEqualTo(LazyTokenBucket.TOKEN_MASK);
     }
+
+    /**
+     * Verify that sub-1000 QPS (e.g., 999) delivers the documented floor-truncated effective rate.
+     * At 2ms request cadence, qps=999 earns floor(2·999/1000)=1 token per 2ms ≈ 500/s (50% under).
+     * This pins the accepted ms-floor behavior so future changes are explicit.
+     */
+    @Test
+    void subThousandQpsEffectiveRateIsFloorPerThousand() {
+        ResourceState st = new ResourceState();
+        ResourceConfig c = cfg(999, 999); // burst 999 tokens
+        // Consume the burst
+        for (int i = 0; i < 999; i++) {
+            LazyTokenBucket.tryAcquire(st, c, 1000L);
+        }
+        // Bucket is now drained. Issue requests at 2ms cadence (1002, 1004, 1006, ...) to
+        // establish steady state: every 2ms earns floor(2·999/1000)=1 token → 500/s effective.
+        long now = 1000;
+        int passed = 0;
+        for (int i = 0; i < 50; i++) {
+            now += 2;
+            if (LazyTokenBucket.tryAcquire(st, c, now)) {
+                passed++;
+                LazyTokenBucket.tryAcquire(st, c, now); // consume the token, advance time
+            }
+        }
+        // 50 samples × 2ms = 100ms elapsed. At 500/s effective, we expect ≈ 50 tokens consumed.
+        // Assert approximately 50 (allow ±2 for timing variance).
+        assertThat(passed).isGreaterThanOrEqualTo(48);
+        assertThat(passed).isLessThanOrEqualTo(52);
+    }
 }

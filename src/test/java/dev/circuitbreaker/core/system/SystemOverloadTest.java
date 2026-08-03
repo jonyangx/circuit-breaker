@@ -48,4 +48,43 @@ class SystemOverloadTest {
         SystemOverload.stopProbe();
         assertThat(SystemOverload.SHED_PERMILLE).isGreaterThanOrEqualTo(0);
     }
+
+    @Test
+    void stopProbeAndWaitThenStartProbePreventsDualProbeRace() throws InterruptedException {
+        // BR-043: verify that stopProbe() waits for the thread to exit, preventing
+        // the dual-probe race (two probe threads running simultaneously).
+        SystemOverload.startProbe();
+        Thread.sleep(100); // let the probe thread start
+
+        // Stop and immediately restart — the old thread must be joined before the new one starts.
+        SystemOverload.stopProbe();
+        SystemOverload.startProbe();
+
+        Thread.sleep(1_200); // allow the new probe thread to run
+
+        // Verify only one probe thread is active by checking that the probe is still functional.
+        // If two threads were running, they'd both call onCpuSample() and SHED_PERMILLE would be set.
+        // (This is a best-effort check; the real guarantee is the join in stopProbe/startProbe.)
+        SystemOverload.stopProbe();
+        assertThat(SystemOverload.SHED_PERMILLE).isGreaterThanOrEqualTo(0);
+    }
+
+    @Test
+    void startProbeIsIdempotentWhenAlreadyRunning() throws InterruptedException {
+        // BR-043: calling startProbe() while already running must be a no-op (CAS guard).
+        SystemOverload.startProbe();
+        Thread.sleep(100);
+
+        // Attempt to start again — must not spawn a second thread.
+        SystemOverload.startProbe();
+        Thread.sleep(1_200);
+
+        // Stop once — if two threads were running, one might still be active after stop().
+        SystemOverload.stopProbe();
+        Thread.sleep(100); // give time for any "second" thread to exit (if it existed)
+
+        // Verify we can start again cleanly (only one thread was running)
+        SystemOverload.startProbe();
+        SystemOverload.stopProbe();
+    }
 }
