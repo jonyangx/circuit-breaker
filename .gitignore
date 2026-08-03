@@ -49,3 +49,4 @@ build-test-out.txt
 
 # crash dumps
 *.stackdump
+.security-reports/
