@@ -70,8 +70,15 @@ public final class EwmaCircuitBreaker {
         // Self-heal (A1): if the probe did not resolve before its deadline (lost / forgotten release),
         // re-arm the OPEN cycle so a fresh probe is elected after openMillis — never stuck forever.
         if (nowMs >= brEnd(b)) {
-            transition(st, HALF_OPEN, OPEN, nowMs + cfg.openMillis);
-            st.probeGen.set(-1L); // probe invalidated on re-arm
+            // P2 fix: only invalidate probeGen on a re-arm this thread actually won. transition()
+            // may fail because another thread already re-armed HALF_OPEN→OPEN; in that case its
+            // winner already set probeGen=-1. An unconditional set here is a no-op now, but under a
+            // pathological pause it could land AFTER a later OPEN→HALF_OPEN winner recorded a fresh
+            // probeGen — silently invalidating a live probe and locking the breaker in HALF_OPEN
+            // until the next self-heal tick. Guarding on transition()'s return closes that window.
+            if (transition(st, HALF_OPEN, OPEN, nowMs + cfg.openMillis)) {
+                st.probeGen.set(-1L); // probe invalidated on re-arm
+            }
         }
         return false;
     }

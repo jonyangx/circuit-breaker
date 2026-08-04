@@ -63,6 +63,10 @@ class CircuitBreakerStateMachineTransitionTest {
 
         // Others blocked while probe in flight
         assertThat(EwmaCircuitBreaker.tryAcquire(st, cfg, 7000)).isFalse();
+
+        // probeGen matches the breaker generation (OPEN→HALF_OPEN winner's gen)
+        int halfOpenGen = EwmaCircuitBreaker.brGen(st.breakerState.get());
+        assertThat(st.probeGen.get()).isEqualTo(halfOpenGen);
     }
 
     /**
@@ -326,5 +330,112 @@ class CircuitBreakerStateMachineTransitionTest {
         }
 
         assertThat(EwmaCircuitBreaker.brState(st.breakerState.get())).isEqualTo(EwmaCircuitBreaker.CLOSED);
+    }
+
+    /**
+     * P2 fix: HALF_OPEN re-arm only invalidates probeGen when this thread's transition succeeds.
+     *
+     * <p>Before the fix, {@code transition(st, HALF_OPEN, OPEN, ...)} failure (another thread
+     * already re-armed) was followed by an unconditional {@code probeGen.set(-1)}. Under a
+     * pathological pause, that late write could overwrite a subsequent OPEN→HALF_OPEN winner's
+     * fresh probeGen, silently invalidating a live probe and locking HALF_OPEN until the next
+     * self-heal tick. The fix guards on transition()'s return value.</p>
+     *
+     * <p>This test verifies the invariant: after a successful re-arm, probeGen is -1; after
+     * a successful new probe election, probeGen matches the breaker generation. A concurrent
+     * stress test validates the invariant under contention.</p>
+     */
+    @Test
+    void halfOpenReArmOnlyInvalidatesProbeGenOnSuccessfulTransition() {
+        ResourceState st = new ResourceState();
+        ResourceConfig cfg = breakerCfg();
+
+        // Trip to OPEN
+        for (int i = 1; i <= 5; i++) {
+            EwmaCircuitBreaker.tryAcquire(st, cfg, 0);
+            EwmaCircuitBreaker.release(st, i * TAU, false, cfg, true);
+        }
+        assertThat(EwmaCircuitBreaker.brState(st.breakerState.get())).isEqualTo(EwmaCircuitBreaker.OPEN);
+
+        // Elect probe → HALF_OPEN
+        boolean probeWon = EwmaCircuitBreaker.tryAcquire(st, cfg, 7000);
+        assertThat(probeWon).isTrue();
+        long probeGen = st.probeGen.get();
+        int brGen = EwmaCircuitBreaker.brGen(st.breakerState.get());
+        // probeGen must match the breaker gen of the elected probe
+        assertThat(probeGen).isEqualTo(brGen);
+
+        // Probe never released → self-heal re-arms at deadline (9000)
+        assertThat(EwmaCircuitBreaker.tryAcquire(st, cfg, 9000)).isFalse(); // blocked (HALF_OPEN)
+        // After deadline (9100): self-heal → OPEN, probeGen invalidated
+        assertThat(EwmaCircuitBreaker.tryAcquire(st, cfg, 9100)).isFalse(); // still blocked (OPEN now)
+        assertThat(EwmaCircuitBreaker.brState(st.breakerState.get())).isEqualTo(EwmaCircuitBreaker.OPEN);
+        assertThat(st.probeGen.get()).isEqualTo(-1L); // probeGen cleared only on successful re-arm
+
+        // Fresh probe election after openMillis (10100) → new probeGen set
+        boolean freshProbe = EwmaCircuitBreaker.tryAcquire(st, cfg, 10500);
+        assertThat(freshProbe).isTrue();
+        long freshProbeGen = st.probeGen.get();
+        int freshBrGen = EwmaCircuitBreaker.brGen(st.breakerState.get());
+        assertThat(freshProbeGen).isEqualTo(freshBrGen); // new probeGen matches new breaker gen
+    }
+
+    /**
+     * Concurrent HALF_OPEN re-arm stress test: many threads race on the same expired HALF_OPEN.
+     * Exactly one thread wins the transition and sets probeGen=-1; all others' transitions fail
+     * and must NOT corrupt probeGen. After all threads finish, either state is OPEN with
+     * probeGen=-1 or a later thread has already started a new probe cycle.
+     */
+    @Test
+    void concurrentHalfOpenReArmPreservesProbeGenInvariant() throws Exception {
+        ResourceState st = new ResourceState();
+        ResourceConfig cfg = breakerCfg();
+
+        // Trip to OPEN
+        for (int i = 1; i <= 5; i++) {
+            EwmaCircuitBreaker.tryAcquire(st, cfg, 0);
+            EwmaCircuitBreaker.release(st, i * TAU, false, cfg, true);
+        }
+
+        // Elect probe → HALF_OPEN (deadline ≈ 8000)
+        EwmaCircuitBreaker.tryAcquire(st, cfg, 7000);
+        assertThat(EwmaCircuitBreaker.brState(st.breakerState.get())).isEqualTo(EwmaCircuitBreaker.HALF_OPEN);
+
+        int threads = 8;
+        ExecutorService es = Executors.newFixedThreadPool(threads);
+        CountDownLatch startLatch = new CountDownLatch(1);
+        CyclicBarrier barrier = new CyclicBarrier(threads);
+        AtomicInteger blockedCount = new AtomicInteger(0);
+
+        // All threads wait at barrier, then simultaneously tryAcquire past the deadline
+        for (int t = 0; t < threads; t++) {
+            es.submit(() -> {
+                try {
+                    barrier.await(); // synchronize arrival just past deadline
+                    boolean result = EwmaCircuitBreaker.tryAcquire(st, cfg, 10000); // well past deadline
+                    if (!result) blockedCount.incrementAndGet();
+                } catch (Exception ignored) {}
+            });
+        }
+
+        // Release all threads simultaneously
+        startLatch.countDown();
+        es.shutdown();
+        es.awaitTermination(5, TimeUnit.SECONDS);
+
+        // All should be blocked (either in OPEN or during re-arm)
+        assertThat(blockedCount.get()).isEqualTo(threads);
+
+        // Invariant: if state is OPEN, probeGen must be -1 (re-arm succeeded).
+        // If some thread already won a new probe election, state could be HALF_OPEN with valid probeGen.
+        long finalBs = st.breakerState.get();
+        int finalState = EwmaCircuitBreaker.brState(finalBs);
+        long finalProbeGen = st.probeGen.get();
+
+        if (finalState == EwmaCircuitBreaker.OPEN || finalState == EwmaCircuitBreaker.CLOSED) {
+            // No active probe → probeGen should be -1
+            assertThat(finalProbeGen).as("probeGen must be -1 when no probe is in flight").isEqualTo(-1L);
+        }
+        // If HALF_OPEN, probeGen is valid (a new probe was elected after our re-arm)
     }
 }

@@ -20,6 +20,14 @@ public final class SystemOverload {
     private static volatile boolean stopProbe = false;
     private static volatile Thread probeThread = null; // BR-043: track thread to prevent dual-probe race
     private static final boolean TEST_MODE = Boolean.getBoolean("circuitbreaker.testMode");
+    /**
+     * How long startProbe()/stopProbe() block on the old probe thread's exit. Tunable for slow
+     * getCpuLoad() hosts; clamped to [0, 60000]. The default 2s comfortably covers a 1s probe
+     * cadence; raising it extends probe shutdown but never blocks the request hot path (probe
+     * lifecycle lives entirely off the request path, per BR-042).
+     */
+    private static final long PROBE_JOIN_TIMEOUT_MS = Math.max(0L,
+            Math.min(60_000L, Long.getLong("circuitbreaker.probeJoinTimeoutMs", 2_000L)));
 
     private SystemOverload() {}
 
@@ -95,7 +103,7 @@ public final class SystemOverload {
             probeThread = t;
             if (prev != null && prev.isAlive()) {
                 try {
-                    prev.join(2000); // wait up to 2s for the old thread to exit
+                    prev.join(PROBE_JOIN_TIMEOUT_MS);
                 } catch (InterruptedException ignored) {
                     Thread.currentThread().interrupt();
                 }
@@ -124,7 +132,7 @@ public final class SystemOverload {
         Thread t = probeThread;
         if (t != null) {
             try {
-                t.join(2000); // wait up to 2s
+                t.join(PROBE_JOIN_TIMEOUT_MS);
             } catch (InterruptedException ignored) {
                 Thread.currentThread().interrupt();
             }

@@ -74,4 +74,43 @@ class CircuitBreakerOperatorTest {
         // breaker is still CLOSED and will serve real traffic normally.
         assertThat(ResourceManager.state(rid).ewmaErrorRatePpm()).isZero();
     }
+
+    /**
+     * P1 fix: a supplier that throws synchronously (e.g. input validation) never produces a Mono,
+     * so doFinally never fires. Without the try-catch in {@code wrap()} the concurrency slot leaks
+     * forever. The slot must be released as CANCELLED (no health signal) and the original exception
+     * propagated.
+     */
+    @Test
+    void synchronousSupplierExceptionReleasesSlot() {
+        int rid = ResourceManager.register(
+                new ResourceConfig(0x04, 0, 0, 0, 1, 1000, 1000, 1_000_000, 1));
+
+        StepVerifier.create(CircuitBreakerOperator.wrap(rid, () -> {
+                    throw new IllegalArgumentException("invalid input");
+                }))
+                .expectError(IllegalArgumentException.class)
+                .verify();
+
+        // The slot was released even though the supplier never returned a Mono.
+        assertThat(ResourceManager.state(rid).sumConcurrency()).isZero();
+    }
+
+    /**
+     * P1 fix, symmetric: a supplier that throws a subclass of Error must also release the slot.
+     * Errors (e.g. AssertionError in a buggy supplier) are equally capable of skipping doFinally.
+     */
+    @Test
+    void synchronousSupplierErrorReleasesSlot() {
+        int rid = ResourceManager.register(
+                new ResourceConfig(0x04, 0, 0, 0, 1, 1000, 1000, 1_000_000, 1));
+
+        StepVerifier.create(CircuitBreakerOperator.wrap(rid, () -> {
+                    throw new AssertionError("internal invariant broken");
+                }))
+                .expectError(AssertionError.class)
+                .verify();
+
+        assertThat(ResourceManager.state(rid).sumConcurrency()).isZero();
+    }
 }

@@ -22,6 +22,9 @@ public final class ResourceManager {
 
     /** Register a resource; returns its global integer resourceId. */
     public static synchronized int register(ResourceConfig config) {
+        if (config == null) {
+            throw new IllegalArgumentException("config must not be null");
+        }
         int id = nextFreeId();
         if (id < 0) {
             throw new IllegalStateException("resource limit reached: " + MAX_RESOURCES);
