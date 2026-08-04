@@ -163,3 +163,48 @@
 ## 一句话总结（2026-08-04 增补）
 
 > **文件完整性优先于一切；review 的"已修复"要过 git diff 复核；防御性守卫要给相对阈值加绝对下限；flaky 修复用联合概率量化证据；共享状态的发布可见性用"类型即契约"守护。**
+
+---
+
+## 16. "概率可忽略"的注释经不起周期性输入：EWMA 环绕别名需绝对时钟锚点
+
+**事件**（2026-08-04 残余风险会话）：`EwmaCircuitBreaker` 的 20 位 `lastUpdateMs` 字段（16ms 量子 → 环绕周期 2²⁴ms ≈ 4.66h）在类 javadoc 里写着"坏窗口 [k·4.66h, k·4.66h+8τ) 概率可忽略"。这对**随机间隔**成立，但对**周期性空闲**（夜间批处理、定时任务）完全不成立——周期正好是 k·4.66h 时，真实的 gap = k·2²⁴ms + ε 在模块化减法下呈现 dt≈0，re-seed 守卫（`dtMs>0 && dtMs>>3≥τ && dtMs≥100ms`）永远看不见它，陈旧高 ppm 存活到第一个恢复样本上假跳闸。概率论证的前提是输入随机；**确定性的周期输入把"小概率坏窗口"变成"每次都命中"**。
+
+**修复**：给 `ResourceState` 加 `lastEwmaUpdateMs`（AtomicLong，绝对相对时钟锚点，`ClockSource.nowRelMs()` 基于 nanoTime、~292 年才环绕），在 CAS 提交成功后才写入，与 modular 守卫用同一套阈值（≥8τ 且 ≥100ms）判定"真实空闲"。modular dt 表达不了 k·2²⁴+ε 的 gap——**绝对时钟是唯一能看到它的观测点**。
+
+**教训**：
+- **"概率可忽略"的定量声明必须写出分布假设**。注释里写"坏窗口概率 P"，先问：输入是随机还是周期？周期输入下"概率"没有意义，只有"是否命中"。
+- **两个观测点互补时，写一个回归测试证明"单点失效"**：`wrapAliasedPeriodicIdleDoesNotFreezeStalePpm` 在旧代码下必假跳闸（count=3、ppm≈865k ≥ 阈值），新代码 re-seed 后不跳——测试能区分修复前后（lesson 3 原则）。
+- **"理论性/可选"的 review 项也可能藏着真 bug**：N5（LazyTokenBucket 42 位时间溢出）经算术验证是**非问题**——`nowMs << 22` 在 64 位 long 上天然等价于 `(nowMs & 2⁴²-1) << 22`，显式掩码是死代码；而 N4（被 review 标为 MEDIUM 级别场景）反而是真实可触发的假跳闸。逐项算术验证，不靠 review 的严重度分级决定修不修。
+
+---
+
+## 17. 热切换关闭能力后，陈旧 token 的 release 会用"降级默认值"假跳闸
+
+**事件**：N4——token 在 CB 开启时取得（mask 带 0x01），随后热切换把 CB 关闭（新 config 的 mask 无 0x01，默认 errThresholdPpm=0、minCalls=1）。`FlatExecutionEngine.release` 按 **token 内嵌 mask** 仍调用 `EwmaCircuitBreaker.release`（P2 修复的正确语义：acquire 时的能力必须释放），但 release 的 CLOSED 跳闸重检用的是**当前 config** 的 0/1 降级阈值——任何已累积的 count≥1 都立刻跳闸，把操作员明确关闭的断路器又打开、重新阻断流量。
+
+**修复**：`EwmaCircuitBreaker.release` 开头加守卫：当前 cfg 不含 `MASK_CIRCUIT_BREAKER` 时直接 return——既不跳闸也不喂 EWMA（已关闭的断路器没有资格接受健康样本）。
+
+**教训**：
+- **"acquire 时快照能力、release 时读取当前 config"的混合语义会产生降级默认值陷阱**：P2 修复保证了槽位不泄漏，却把释放路径暴露给了"当前配置比 acquire 时更宽松"的假跳闸。任何"token 内嵌 mask + 当前 cfg 校验"的双源设计都要专门检查**能力被关闭的方向**。
+- **EWMA/跳闸重检不能使用"能力关闭时"的默认阈值**——默认值（0/1）是为"未启用"设计的，不是为"曾经启用"设计的。
+- **回归测试不要依赖真实时钟**：本会话 R2 测试最初用 `Thread.sleep(1100)` 等 EWMA 累积出真实 α，在并发文件改写进程的干扰下反复 flaky（编译到源文件的中间态）；改成同包直接调 `EwmaCircuitBreaker.release(st, 伪造nowMs, ...)` 后完全确定。**能注入时间就注入时间**，wall-clock 依赖是 flaky 的来源。
+
+---
+
+## 18. 公共访问器的异常类型是外部攻击面：AtomicReferenceArray.get 的 IOOBE 要拦成 IAE
+
+**事件**：N1——`ResourceManager.state()/config()` 直接 `AtomicReferenceArray.get(resourceId)`，越界抛 `IndexOutOfBoundsException`。外部消费者（`CircuitBreakerCollector`）在 `collect()`（Prometheus 抓取）里中招会**整个 scrape 断掉**，且异常类型对调用方不友好。同样的 id 在 `FlatExecutionEngine.tryAcquire` 里是清晰的 `IllegalArgumentException`——两个入口契约不一致。
+
+**修复**：`state()/config()` 加 `checkRange`（`<0 || ≥MAX_RESOURCES → IllegalArgumentException("resourceId out of range [0, N): id")`）；`CircuitBreakerCollector` 构造函数对每个 id 做同样校验，**fail-fast 在构造期**而不是抓取期。未注册但在界内的 id 仍返回 null（collector 跳过，允许"先建 collector 后注册资源"）。
+
+**教训**：
+- **`AtomicReferenceArray.get`/数组下标的越界异常类型是"实现泄漏"**：公共 API 的入参校验要统一契约（这里是 IAE），不能把 JDK 容器类型（IOOBE）直接暴露给调用方。
+- **校验放在"最早失败的构造点"**：collector 在构造期拒绝坏 id，比在 `collect()` 的循环里爆掉整个 metric 家族强——错误定位距离使用点最近。
+- **契约一致性测试**：`ResourceManagerBoundsTest` 把"负 id / ≥MAX id → IAE、界内未注册 → null"钉死为行为，防止未来某天有人把 null 改成抛异常或反过来。
+
+---
+
+## 一句话总结（2026-08-04 残余风险会话增补）
+
+> **周期输入击穿"概率可忽略"的注释；热切换关闭能力后陈旧 token 会用降级默认值假跳闸；公共访问器把 IOOBE 拦成 IAE；能注入时间就不要依赖 wall-clock。**

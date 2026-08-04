@@ -156,4 +156,36 @@ class EwmaCircuitBreakerTest {
         EwmaCircuitBreaker.release(st, 1007L, false, c, true);
         assertThat(EwmaCircuitBreaker.ewPpm(st.ewmaState.get())).isEqualTo(ppmAfterFirst);
     }
+
+    /**
+     * R1 (AA residual): a *periodic* idle whose true gap is k·2²⁴ms + ε aliases the 20-bit modular
+     * dt to ~0 — the modular re-seed guard (dtMs > 0 && dtMs>>3 >= τ && dtMs >= floor) cannot see
+     * it, so stale error rate survives and the first recovery sample false-trips. The absolute
+     * wall-clock guard (ResourceState.lastEwmaUpdateMs) must re-seed instead.
+     *
+     * <p>Setup: minCalls=3 — two failures drive count=2, ppm≈high (just under trip). Then a
+     * SUCCESS at nowMs = 2^24 + 2000 (4.66h + 2s later; nowQ aliases back to the SAME quantum as
+     * t=2000 → dtQ=0, dtMs=0). Modular guard: dtMs=0 → no re-seed. Absolute guard: real gap
+     * ≈ 4.66h ≥ 8τ && ≥ 100ms → re-seed → count=1, ppm=0 → no trip.
+     * Without the fix: count=3, ppm≈865k (α=0 decay) → 3 ≥ minCalls && ppm ≥ threshold → false OPEN.
+     */
+    @Test
+    void wrapAliasedPeriodicIdleDoesNotFreezeStalePpm() {
+        ResourceConfig c = new ResourceConfig(0x01, 0, 0, 500_000, 3, OPEN, TAU, 0, 1);
+        ResourceState st = new ResourceState();
+        EwmaCircuitBreaker.tryAcquire(st, c, 0);
+
+        EwmaCircuitBreaker.release(st, 1000L, false, c, true); // count=1, ppm≈630k
+        EwmaCircuitBreaker.release(st, 2000L, false, c, true); // count=2, ppm≈865k — just under trip
+        assertThat(EwmaCircuitBreaker.ewCount(st.ewmaState.get())).isEqualTo(2);
+        assertThat(EwmaCircuitBreaker.brState(st.breakerState.get())).isEqualTo(EwmaCircuitBreaker.CLOSED);
+
+        long wrapAlias = (1L << 24) + 2000; // 4.66h later; nowQ ≡ nowQ(2000) mod 2^20
+        EwmaCircuitBreaker.release(st, wrapAlias, true, c, true);
+
+        // Re-seeded: count reset to 1 with the success sample, ppm cleared — no false trip.
+        assertThat(EwmaCircuitBreaker.ewCount(st.ewmaState.get())).isEqualTo(1);
+        assertThat(EwmaCircuitBreaker.ewPpm(st.ewmaState.get())).isZero();
+        assertThat(EwmaCircuitBreaker.brState(st.breakerState.get())).isEqualTo(EwmaCircuitBreaker.CLOSED);
+    }
 }

@@ -19,6 +19,15 @@ public final class CircuitBreakerCollector extends Collector {
     private final int[] resourceIds;
 
     public CircuitBreakerCollector(int... resourceIds) {
+        // AA N1 (residual): fail fast at construction instead of throwing IndexOutOfBoundsException
+        // mid-scrape inside collect(). Unregistered but in-range ids are allowed (skipped in
+        // collect()) so a collector may be built before its resources register.
+        for (int id : resourceIds) {
+            if (id < 0 || id >= ResourceManager.MAX_RESOURCES) {
+                throw new IllegalArgumentException(
+                    "resourceId out of range [0, " + ResourceManager.MAX_RESOURCES + "): " + id);
+            }
+        }
         this.resourceIds = resourceIds;
     }
 

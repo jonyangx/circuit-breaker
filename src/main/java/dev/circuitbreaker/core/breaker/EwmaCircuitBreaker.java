@@ -10,8 +10,10 @@ import dev.circuitbreaker.core.ResourceState;
  * ewmaState:   [gen:8 @56-63][lastUpdateMs:20 @36-55][count:16 @20-35][ppm:20 @0-19]
  *   — lastUpdateMs is stored at 16ms quantum (nowMs>>4), extending the 20-bit field's wrap
  *     horizon from 17.5min to 2^24 ms ≈ 4.66h. A 20-bit raw ms field would alias gaps ≥17.5min
- *     to dt≈0, freezing stale error rate that can false-trip; quantization (16ms/tick) makes the
- *     bad window [k·4.66h, k·4.66h+8τ) with τ≥1s → probability negligible.
+ *     to dt≈0, freezing stale error rate that can false-trip. A *modular* re-seed guard catches
+ *     long idle within the wrap horizon, and a parallel absolute-clock guard (ResourceState
+ *     lastEwmaUpdateMs, R1) catches periodic idle whose true gap is k·2²⁴ms + ε — the aliased dt
+ *     alone cannot express that gap, so the absolute anchor is the only detector that sees it.
  * breakerState:[state:2 @62-63][gen:8 @54-61][endTimeMs:54 @0-53]
  *
  * transition() is the ONLY entry that bumps generation; a stale-generation EWMA is
@@ -75,6 +77,14 @@ public final class EwmaCircuitBreaker {
     }
 
     public static void release(ResourceState st, long nowMs, boolean ok, ResourceConfig cfg, boolean verMatch) {
+        // AA N4 (residual): the breaker was hot-swapped OFF (current config no longer carries
+        // MASK_CIRCUIT_BREAKER), but this token was acquired while it was ON (token-embedded mask).
+        // Its release must neither trip the breaker nor feed the EWMA: the off-config's degraded
+        // defaults (minCalls=1, errThresholdPpm=0) would trip on ANY accumulated state — a false
+        // OPEN that re-blocks traffic after the operator explicitly disabled the breaker.
+        if ((cfg.mask & ResourceConfig.MASK_CIRCUIT_BREAKER) == 0) {
+            return;
+        }
         long b = st.breakerState.get();
         int s = brState(b);
         if (s == HALF_OPEN) {
@@ -122,6 +132,16 @@ public final class EwmaCircuitBreaker {
     static void updateEwma(ResourceState st, long nowMs, int xPpm, ResourceConfig cfg) {
         long nowQ = nowMs >> EW_LAST_Q_SHIFT; // 16ms-quantized reference (extends wrap to 2^24 ms ≈ 4.66h)
         int gNow = brGen(st.breakerState.get());
+        // R1 fix: absolute-clock long-idle detector. The 20-bit modular dt aliases any gap that is
+        // ≡ small (mod 2^24 ms): a *periodic* idle whose true gap is k·2²⁴ + ε presents dt≈0 and
+        // slips past the modular guard below — exactly the nightly-idle scenario AA flagged. The
+        // absolute difference (nowRelMs is nanoTime-based, ~292y wrap) is exact, so the same
+        // thresholds as the modular guard catch wrap-aliased long idle. Written only after the CAS
+        // succeeds so the anchor tracks the last *committed* update; a racing loser may re-seed
+        // off a stale anchor — re-seed is idempotent, so that is safe.
+        long absLast = st.lastEwmaUpdateMs.get();
+        boolean absIdle = absLast >= 0 && ((nowMs - absLast) >> 3) >= cfg.ewmaTauMs
+                && nowMs - absLast >= EW_IDLE_RE_SEED_FLOOR_MS;
         for (;;) {
             long cur = st.ewmaState.get();
             long next;
@@ -131,21 +151,24 @@ public final class EwmaCircuitBreaker {
             } else {
                 long dtQ = (nowQ - ewLast(cur)) & EW_LAST_MASK; // 20-bit modular, 16ms units
                 long dtMs = dtQ << EW_LAST_Q_SHIFT;           // back to ms for α computation
-                // Defect 2 fix: detect idle long enough to fully decay the EWMA and re-seed.
-                // This handles two cases: (a) genuine long idle within the 4.66h wrap period, and
-                // (b) wrap-aliased idle where the real gap is >4.66h but the modular subtraction
-                // presents a small dt. Without this, a stale high error rate survives and can
-                // falsely trip on the first recovery sample after a periodic multi-hour idle.
+                // Defect 2 + R1 fix: detect idle long enough to fully decay the EWMA and re-seed.
+                // Two complementary detectors:
+                //  (a) modular dt within the 4.66h wrap horizon (genuine long idle, or first sample
+                //      after register where ewLast=0 presents dt≈uptime);
+                //  (b) absolute wall-clock gap (R1) — catches wrap-aliased idle where the real gap
+                //      is k·2²⁴ms + ε but the modular subtraction presents a small dt. A periodic
+                //      idle (e.g. nightly batch) hits exactly this alias; without (b) a stale high
+                //      error rate survives and falsely trips on the first recovery sample.
                 // Re-seeding matches the α=1 fully-decayed semantics and resets count so minCalls
                 // starts fresh, consistent with a clean state after a long gap.
                 //
-                // Guard: the gap must ALSO clear an absolute floor. The relative threshold 8τ alone
-                // is degenerate at tiny τ — with τ=1ms, any 8ms+ inter-arrival (ordinary traffic
-                // spacing) resets count, so minCalls can never accumulate and a sustained failure
-                // burst never trips (regression: ResourceIsolationTest). "Long idle" only makes
-                // sense above a physically meaningful gap; below the floor, samples are ordinary
-                // traffic and evidence accumulates normally.
-                if (dtMs > 0 && (dtMs >> 3) >= cfg.ewmaTauMs && dtMs >= EW_IDLE_RE_SEED_FLOOR_MS) {
+                // Shared guard: the gap must ALSO clear an absolute floor. The relative threshold
+                // 8τ alone is degenerate at tiny τ — with τ=1ms, any 8ms+ inter-arrival (ordinary
+                // traffic spacing) resets count, so minCalls can never accumulate and a sustained
+                // failure burst never trips (regression: ResourceIsolationTest). "Long idle" only
+                // makes sense above a physically meaningful gap; below the floor, samples are
+                // ordinary traffic and evidence accumulates normally.
+                if (absIdle || (dtMs > 0 && (dtMs >> 3) >= cfg.ewmaTauMs && dtMs >= EW_IDLE_RE_SEED_FLOOR_MS)) {
                     next = packEwma(gNow, nowQ, 1, xPpm);  // re-seed
                 } else {
                     float a = EwmaAlpha.alpha(dtMs, cfg.ewmaTauMs);
@@ -155,6 +178,7 @@ public final class EwmaCircuitBreaker {
                 }
             }
             if (st.ewmaState.compareAndSet(cur, next)) {
+                st.lastEwmaUpdateMs.set(nowMs); // commit the absolute anchor only with the state
                 return;
             }
         }

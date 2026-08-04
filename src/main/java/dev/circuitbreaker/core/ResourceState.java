@@ -36,6 +36,18 @@ public final class ResourceState {
      */
     public final AtomicLong probeGen = new AtomicLong(-1L);
 
+    /**
+     * R1 fix (AA residual): absolute-ms wall anchor of the last committed EWMA update, used by
+     * {@code EwmaCircuitBreaker.updateEwma} to detect long idle even when the 20-bit modular
+     * {@code lastUpdateMs} field aliases the gap to ~0 (a periodic idle whose true gap is
+     * {@code k·2²⁴ ms + ε} presents dt≈0 and would otherwise slip past the modular re-seed guard,
+     * freezing stale error rate → false trip on the first recovery sample). nowRelMs() is
+     * nanoTime-based (~292y wrap), so this absolute difference is exact. NOT {@code @Contended}:
+     * touched only on the release path of breaker-governed calls, never per acquire.
+     * -1 = no update ever committed (first update falls back to the modular guard).
+     */
+    public final AtomicLong lastEwmaUpdateMs = new AtomicLong(-1L);
+
     public ResourceState() {
         for (int i = 0; i < SEG; i++) {
             concurrency[i] = new AtomicInteger();

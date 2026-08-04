@@ -73,6 +73,23 @@ class PolicyBuilderValidationTest {
     }
 
     /**
+     * R6 (Defect 4 residual): a positive but sub-floor openMillis (0 < x < 100ms) still risks
+     * probe-timeout livelock — the floor exists to keep the self-healing window meaningful, not
+     * just to reject non-positive values.
+     */
+    @Test
+    void rejectsSubFloorPositiveOpenMillis() {
+        assertThatThrownBy(() ->
+                new PolicyBuilder()
+                        .enableCircuitBreaker(0.5f)
+                        .openMillis(50)
+                        .build())
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("openMillis must be > 0")
+                .hasMessageContaining("100ms");
+    }
+
+    /**
      * Existing validation: errThreshold must be in (0, 1].
      */
     @Test

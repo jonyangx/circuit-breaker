@@ -48,11 +48,23 @@ public final class ResourceManager {
         }
         return -1;
     }
+    private static void checkRange(int resourceId) {
+        // AA N1 (residual): AtomicReferenceArray.get throws IndexOutOfBoundsException for an
+        // out-of-range id, which leaks to external callers (CircuitBreakerCollector) as a scrape
+        // break with the wrong exception type. Validate up front with the same contract tryAcquire
+        // uses, so misuse surfaces as a clear IllegalArgumentException.
+        if (resourceId < 0 || resourceId >= MAX_RESOURCES) {
+            throw new IllegalArgumentException("resourceId out of range [0, " + MAX_RESOURCES + "): " + resourceId);
+        }
+    }
+
     public static ResourceConfig config(int resourceId) {
+        checkRange(resourceId);
         return CONFIGS.get(resourceId);
     }
 
     public static ResourceState state(int resourceId) {
+        checkRange(resourceId);
         return STATES.get(resourceId);
     }
 

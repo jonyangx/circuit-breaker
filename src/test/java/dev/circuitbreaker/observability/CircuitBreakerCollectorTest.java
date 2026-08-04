@@ -9,6 +9,7 @@ import org.junit.jupiter.api.Test;
 import java.util.List;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /** Prometheus export tests (UC-010; BR-070/071/072). TC-API-007-001. Asserts on collect() samples directly. */
 class CircuitBreakerCollectorTest {
@@ -43,5 +44,19 @@ class CircuitBreakerCollectorTest {
         assertThat(pass).isGreaterThan(0);                // monotonic counter (BR-070/071)
         assertThat(block).isGreaterThanOrEqualTo(0);
         assertThat(err).isBetween(0.0, 1.0);              // gauge in [0,1] (BR-072)
+    }
+
+    /**
+     * R3 (AA N1 residual): a collector built with an out-of-range resourceId must fail fast at
+     * construction — not throw IndexOutOfBoundsException mid-scrape inside collect().
+     */
+    @Test
+    void constructorRejectsOutOfRangeResourceId() {
+        assertThatThrownBy(() -> new CircuitBreakerCollector(-1))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("out of range");
+        assertThatThrownBy(() -> new CircuitBreakerCollector(ResourceManager.MAX_RESOURCES))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("out of range");
     }
 }

@@ -1,5 +1,6 @@
 package dev.circuitbreaker.core.system;
 
+import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 
 import static org.assertj.core.api.Assertions.*;
@@ -12,6 +13,15 @@ import static org.assertj.core.api.Assertions.*;
  * so TEST_MODE is true and setShedPermilleForTest is callable.</p>
  */
 class SystemOverloadShedValidationTest {
+
+    // Defect 8 residual: inline try/finally resets only cover the passing path — a failed
+    // assertion mid-test would leak SHED_PERMILLE into other classes. Same @AfterEach discipline
+    // as SystemOverloadTest: always restore the global shed state after every test.
+    @AfterEach
+    void reset() {
+        SystemOverload.stopProbe();
+        SystemOverload.setShedPermilleForTest(0);
+    }
 
     /**
      * AA §3.1: setShedPermilleForTest must reject values outside [0, 1000].
