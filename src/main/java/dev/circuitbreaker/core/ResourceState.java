@@ -28,6 +28,14 @@ public final class ResourceState {
     public final LongAdder passCount = new LongAdder();
     public final LongAdder blockCount = new LongAdder();
 
+    /**
+     * P1 fix: probe generation to prevent stale releases from hijacking HALF_OPEN transition.
+     * Tracks the breaker generation of the current probe (set on OPEN→HALF_OPEN transition).
+     * Only a release whose breaker generation matches probeGen can transition HALF_OPEN state.
+     * Initialized to -1 (no probe elected).
+     */
+    public final AtomicLong probeGen = new AtomicLong(-1L);
+
     public ResourceState() {
         for (int i = 0; i < SEG; i++) {
             concurrency[i] = new AtomicInteger();

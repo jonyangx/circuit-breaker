@@ -19,12 +19,22 @@ public final class ConfigSwapper {
      *         currently published version.
      */
     public static void swap(int resourceId, ResourceConfig newConfig) {
-        ResourceConfig current = ResourceManager.config(resourceId);
-        if (current != null && newConfig.version <= current.version) {
-            throw new IllegalArgumentException(
-                "new config version " + newConfig.version
-                    + " must be > current version " + current.version);
-        }
-        ResourceManager.publishConfig(resourceId, newConfig);
+        ResourceConfig current;
+        ResourceConfig published;
+        do {
+            current = ResourceManager.config(resourceId);
+            if (current != null && newConfig.version <= current.version) {
+                throw new IllegalArgumentException(
+                    "new config version " + newConfig.version
+                        + " must be > current version " + current.version);
+            }
+            // P2 fix: version must be non-negative (protect against config service bugs that might emit -1)
+            if (newConfig.version < 0) {
+                throw new IllegalArgumentException(
+                    "new config version must be non-negative, got: " + newConfig.version);
+            }
+            // CAS loop ensures only one thread publishes this version
+            published = ResourceManager.compareAndExchangeConfig(resourceId, current, newConfig);
+        } while (published != current);
     }
 }

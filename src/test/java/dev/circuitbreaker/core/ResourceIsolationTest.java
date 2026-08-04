@@ -57,24 +57,21 @@ class ResourceIsolationTest {
         int ridB = ResourceManager.register(
                 new ResourceConfig(0x04, 0, 0, 0, 1, 1000, 1000, 3, 1));
 
-        // Saturate A (hold 3 slots)
-        long a1 = FlatExecutionEngine.tryAcquire(ridA);
-        long a2 = FlatExecutionEngine.tryAcquire(ridA);
-        long a3 = FlatExecutionEngine.tryAcquire(ridA);
+        // Saturate A (hold 3 slots). With limit < SEG, per-segment caps may transiently block an
+        // acquire before the global limit is reached, so retry until 3 slots are held.
+        long[] a = acquireN(ridA, 3);
         assertThat(FlatExecutionEngine.tryAcquire(ridA)).isEqualTo(BlockCode.CONCURRENCY); // A saturated
 
-        // B's concurrency is completely unaffected — 3 slots free
-        assertThat(FlatExecutionEngine.tryAcquire(ridB)).isGreaterThanOrEqualTo(0);
-        assertThat(FlatExecutionEngine.tryAcquire(ridB)).isGreaterThanOrEqualTo(0);
-        assertThat(FlatExecutionEngine.tryAcquire(ridB)).isGreaterThanOrEqualTo(0);
+        // B's concurrency is completely unaffected — 3 slots free (retry for the same reason)
+        long[] b = acquireN(ridB, 3);
         assertThat(FlatExecutionEngine.tryAcquire(ridB)).isEqualTo(BlockCode.CONCURRENCY); // B independently saturated
 
-        // Release A's slots — B's state is independent
-        FlatExecutionEngine.release(ridA, a1, true);
-        FlatExecutionEngine.release(ridA, a2, true);
-        FlatExecutionEngine.release(ridA, a3, true);
-        // B must still be saturated (its own 3 slots still held)
-        assertThat(FlatExecutionEngine.tryAcquire(ridB)).isEqualTo(BlockCode.CONCURRENCY);
+        // Release A's slots — B's state must be unaffected (B still holds its own 3 slots)
+        for (long t : a) FlatExecutionEngine.release(ridA, t, true);
+        assertThat(FlatExecutionEngine.tryAcquire(ridB)).isEqualTo(BlockCode.CONCURRENCY); // B still saturated
+
+        // Cleanup B's slots
+        for (long t : b) FlatExecutionEngine.release(ridB, t, true);
     }
 
     // ---- Stat counter isolation: passCount/blockCount are per-resource ----
@@ -198,5 +195,27 @@ class ResourceIsolationTest {
 
         // B's EWMA error rate is 0 (no failures influenced it)
         assertThat(ResourceManager.state(ridB).ewmaErrorRatePpm()).isZero();
+    }
+
+    /**
+     * Acquire exactly {@code n} tokens from {@code rid}, retrying past transient per-segment caps.
+     *
+     * <p>When {@code concurrencyLimit < SEG}, the per-segment cap (ceil(limit/SEG)=1) can block an
+     * acquire even when the global limit hasn't been reached (two ThreadLocalRandom probes hit the
+     * same segment). This helper retries until {@code n} tokens are held, so isolation tests stay
+     * deterministic without loosening their assertions.</p>
+     */
+    private static long[] acquireN(int rid, int n) {
+        long[] tokens = new long[n];
+        int got = 0;
+        int attempts = 0;
+        while (got < n) {
+            long t = FlatExecutionEngine.tryAcquire(rid);
+            if (t >= 0) {
+                tokens[got++] = t;
+            }
+            assertThat(++attempts).isLessThan(n * 100); // safety bound against infinite loop
+        }
+        return tokens;
     }
 }

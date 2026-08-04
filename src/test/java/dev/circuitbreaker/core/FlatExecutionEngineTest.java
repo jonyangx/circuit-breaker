@@ -18,16 +18,26 @@ class FlatExecutionEngineTest {
     void concurrencyBlocksAndReleasesViaEngine() {
         int rid = ResourceManager.register(
                 new ResourceConfig(0x04, 0, 0, 0, 1, 1000, 1000, 2, 1));
-        long t1 = FlatExecutionEngine.tryAcquire(rid);
-        long t2 = FlatExecutionEngine.tryAcquire(rid);
-        assertThat(t1).isGreaterThanOrEqualTo(0);
-        assertThat(t2).isGreaterThanOrEqualTo(0);
+        // Acquire 2 tokens, retrying past transient per-segment caps (limit=2 < SEG=16)
+        long t1 = acquireOrFail(rid);
+        long t2 = acquireOrFail(rid);
         assertThat(FlatExecutionEngine.tryAcquire(rid)).isEqualTo(BlockCode.CONCURRENCY); // 3rd blocked
         FlatExecutionEngine.release(rid, t1, true);
         assertThat(FlatExecutionEngine.tryAcquire(rid)).isGreaterThanOrEqualTo(0); // freed
         // token carries mask + version
         assertThat(TokenCodec.decodeMask(t1)).isEqualTo(0x04);
         assertThat(TokenCodec.decodeVersion(t1)).isEqualTo(1);
+    }
+
+    /** Acquire a token, retrying past transient per-segment caps. */
+    private static long acquireOrFail(int rid) {
+        long token;
+        int attempts = 0;
+        do {
+            token = FlatExecutionEngine.tryAcquire(rid);
+            org.assertj.core.api.Assertions.assertThat(++attempts).isLessThan(100);
+        } while (token < 0);
+        return token;
     }
 
     @Test

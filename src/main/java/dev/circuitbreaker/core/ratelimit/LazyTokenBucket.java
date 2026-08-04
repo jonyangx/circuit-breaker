@@ -70,10 +70,16 @@ public final class LazyTokenBucket {
         if (qps <= 0 || cap <= 0 || dtMs <= 0) {
             return 0L;
         }
+        // Defensive saturation check for pathological inputs
+        if (dtMs >= (TOKEN_MASK + 1) || qps >= (Long.MAX_VALUE / 1000)) {
+            return cap; // pathological input forced saturation
+        }
         long dtSat = cap * 1000L / qps; // ms needed to refill to cap
         if (dtMs >= dtSat) {
             return cap;                  // saturated — skip the multiply (overflow-safe)
         }
-        return dtMs * qps / 1000L;       // ms-granularity; dtMs < dtSat ⇒ no overflow
+        long add = dtMs * qps / 1000L;   // ms-granularity; dtMs < dtSat ⇒ no overflow
+        // Final clamp prevents any residual overflow
+        return Math.min(add, cap);
     }
 }

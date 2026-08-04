@@ -10,6 +10,8 @@ import java.util.List;
  * behaves exactly as before — the check is strictly opt-in and adds zero overhead.</p>
  */
 public final class PolicyBuilder {
+    private static final long TOKEN_FIELD_MAX = (1L << 22) - 1; // 4,194,303 (22-bit token field)
+
     private int mask = 0;
     private long qps = 0;
     private long capacity = 0;
@@ -48,9 +50,15 @@ public final class PolicyBuilder {
         if ((mask & ResourceConfig.MASK_RATE_LIMIT) != 0 && qps <= 0) {
             throw new IllegalArgumentException("qps must be > 0");
         }
-        if ((mask & ResourceConfig.MASK_RATE_LIMIT) != 0 && qps > 4_194_303L) {
+        if ((mask & ResourceConfig.MASK_RATE_LIMIT) != 0 && qps > TOKEN_FIELD_MAX) {
             // token bucket's token field is 22 bits (~4.19M); a larger burst would overflow/corrupt it.
-            throw new IllegalArgumentException("qps must be <= 4_194_303 (22-bit token field)");
+            throw new IllegalArgumentException("qps must be <= " + TOKEN_FIELD_MAX + " (22-bit token field)");
+        }
+        // AA §2.3 fix: capacity must also be <= TOKEN_FIELD_MAX. A malicious config could set
+        // capacity far beyond the token field, causing LazyTokenBucket.seed() to silently clamp
+        // (unexpected behavior) or overflow (state corruption).
+        if ((mask & ResourceConfig.MASK_RATE_LIMIT) != 0 && capacity > TOKEN_FIELD_MAX) {
+            throw new IllegalArgumentException("capacity must be <= " + TOKEN_FIELD_MAX + " (22-bit token field)");
         }
         if ((mask & ResourceConfig.MASK_CIRCUIT_BREAKER) != 0) {
             if (errThresholdPpm <= 0 || errThresholdPpm > 1_000_000) {
@@ -68,6 +76,18 @@ public final class PolicyBuilder {
         }
         if ((mask & ResourceConfig.MASK_CONCURRENCY) != 0 && concurrencyLimit <= 0) {
             throw new IllegalArgumentException("concurrencyLimit must be > 0");
+        }
+        // P1 fix: warn when concurrencyLimit < SEG. SegmentedConcurrency enforces a per-segment cap of
+        // ceil(limit/SEG); when limit < SEG that cap is 1, so the effective concurrency ceiling drops
+        // well below the configured value (a single in-flight request in the probed segment blocks it).
+        // This is a documented trade-off of lock-free segmentation, not an error — surface a warning so
+        // operators notice the under-provisioning rather than failing the build.
+        if ((mask & ResourceConfig.MASK_CONCURRENCY) != 0 && concurrencyLimit < ResourceState.SEG) {
+            System.err.println(
+                "[circuit-breaker] WARNING: concurrencyLimit=" + concurrencyLimit
+                    + " < SEG=" + ResourceState.SEG
+                    + " — segmented concurrency may block well below the configured limit; "
+                    + "raise concurrencyLimit to >= SEG for accurate enforcement.");
         }
         ResourceConfig cfg = new ResourceConfig(mask, qps, capacity, errThresholdPpm, minCalls,
                 openMillis, ewmaTauMs, concurrencyLimit, 1);

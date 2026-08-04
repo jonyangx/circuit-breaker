@@ -57,4 +57,13 @@ public final class ResourceManager {
     public static void publishConfig(int resourceId, ResourceConfig config) {
         CONFIGS.set(resourceId, config);
     }
+
+    /**
+     * Atomic compare-and-exchange publish point for the config slot. Returns the value that was
+     * actually observed at the slot. Used by ConfigSwapper's CAS loop to make version+1 publication
+     * atomic under concurrent swap. BR-050/052.
+     */
+    public static ResourceConfig compareAndExchangeConfig(int resourceId, ResourceConfig expected, ResourceConfig newConfig) {
+        return CONFIGS.compareAndExchange(resourceId, expected, newConfig);
+    }
 }

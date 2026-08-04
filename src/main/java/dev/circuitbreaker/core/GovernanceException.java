@@ -21,9 +21,21 @@ public abstract class GovernanceException extends RuntimeException {
 
     private final long blockCode;
 
-    protected GovernanceException(long blockCode, String message) {
-        super(message);
+    /**
+     * Low-overhead constructor that skips stack trace capture (hot-path friendly).
+     * Subclasses use this to avoid allocating stack traces on block decisions.
+     */
+    protected GovernanceException(long blockCode, String message, Throwable cause,
+                                  boolean enableSuppression, boolean writableStackTrace) {
+        super(message, cause, enableSuppression, writableStackTrace);
         this.blockCode = blockCode;
+    }
+
+    /**
+     * Convenience constructor for subclasses (stack-trace-free).
+     */
+    protected GovernanceException(long blockCode, String message) {
+        this(blockCode, message, null, false, false);
     }
 
     public long getBlockCode() {
@@ -59,24 +71,32 @@ public abstract class GovernanceException extends RuntimeException {
     /** Rate limiting blocked the call ({@link BlockCode#RATE_LIMITER}). */
     public static final class RateLimitedException extends GovernanceException {
         private static final long serialVersionUID = 1L;
-        public RateLimitedException() { super(BlockCode.RATE_LIMITER, "rate limited"); }
+        public RateLimitedException() {
+            super(BlockCode.RATE_LIMITER, "rate limited");
+        }
     }
 
     /** Circuit breaker is open ({@link BlockCode#CIRCUIT_BREAKER}). */
     public static final class CircuitOpenException extends GovernanceException {
         private static final long serialVersionUID = 1L;
-        public CircuitOpenException() { super(BlockCode.CIRCUIT_BREAKER, "circuit breaker open"); }
+        public CircuitOpenException() {
+            super(BlockCode.CIRCUIT_BREAKER, "circuit breaker open");
+        }
     }
 
     /** Concurrency limit exceeded ({@link BlockCode#CONCURRENCY}). */
     public static final class ConcurrencyLimitedException extends GovernanceException {
         private static final long serialVersionUID = 1L;
-        public ConcurrencyLimitedException() { super(BlockCode.CONCURRENCY, "concurrency limit exceeded"); }
+        public ConcurrencyLimitedException() {
+            super(BlockCode.CONCURRENCY, "concurrency limit exceeded");
+        }
     }
 
     /** System overload graded shedding ({@link BlockCode#SYSTEM_OVERLOAD}). */
     public static final class SystemOverloadedException extends GovernanceException {
         private static final long serialVersionUID = 1L;
-        public SystemOverloadedException() { super(BlockCode.SYSTEM_OVERLOAD, "system overloaded"); }
+        public SystemOverloadedException() {
+            super(BlockCode.SYSTEM_OVERLOAD, "system overloaded");
+        }
     }
 }

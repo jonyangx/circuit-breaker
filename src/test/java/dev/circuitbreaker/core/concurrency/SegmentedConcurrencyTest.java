@@ -23,16 +23,28 @@ class SegmentedConcurrencyTest {
     void blocksOverLimitAndRollsBack() {
         ResourceState st = new ResourceState();
         ResourceConfig c = cfg(4);
-        int[] bidx = new int[4];
-        for (int i = 0; i < 4; i++) {
-            bidx[i] = SegmentedConcurrency.tryAcquire(st, c);
-            assertThat(bidx[i]).isBetween(0, ResourceState.SEG - 1);
-        }
-        assertThat(SegmentedConcurrency.tryAcquire(st, c)).isLessThan(0); // 5th blocked
+        // With limit=4 < SEG=16, limitPerSeg=1, so a transient per-segment cap can block an
+        // acquire before the global limit is reached. Retry until 4 slots are held.
+        int[] bidx = acquireN(st, c, 4);
+        assertThat(SegmentedConcurrency.tryAcquire(st, c)).isLessThan(0); // 5th blocked (global limit)
         for (int i = 0; i < 4; i++) {
             SegmentedConcurrency.release(st, bidx[i]);
         }
         assertThat(st.sumConcurrency()).isZero(); // rollback to zero
+    }
+
+    /** Acquire exactly n tokens, retrying past transient per-segment caps (limitPerSeg=1 collisions). */
+    private static int[] acquireN(ResourceState st, ResourceConfig c, int n) {
+        int[] bidx = new int[n];
+        int got = 0, attempts = 0;
+        while (got < n) {
+            int b = SegmentedConcurrency.tryAcquire(st, c);
+            if (b >= 0) {
+                bidx[got++] = b;
+            }
+            assertThat(++attempts).isLessThan(n * 100); // safety bound
+        }
+        return bidx;
     }
 
     @Test

@@ -47,6 +47,12 @@ Thumbs.db
 *.log
 build-test-out.txt
 
+# Code review / diff artifacts (generated, not source)
+CODE_REVIEW_REPORT*.md
+FIX_SUMMARY.md
+diff_output.txt
+full_diff.txt
+
 # crash dumps
 *.stackdump
 .security-reports/

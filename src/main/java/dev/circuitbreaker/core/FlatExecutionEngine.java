@@ -81,6 +81,9 @@ public final class FlatExecutionEngine {
                 " (possible cross-resource bug in reactive pipeline)");
         }
 
+        // P2 fix: release uses the mask embedded in the token (acquire-time capabilities), NOT the
+        // current config mask. If concurrency/circuit breaker were enabled when the token was acquired,
+        // they must be released regardless of hot-reload — otherwise the slot leaks forever.
         if ((mask & ResourceConfig.MASK_CONCURRENCY) != 0) {
             SegmentedConcurrency.release(st, bucketIdx); // thread-agnostic rollback (BR-032)
         }

@@ -46,7 +46,14 @@ public final class EwmaCircuitBreaker {
                 // race to transition OPEN → HALF_OPEN; single winner becomes the probe.
                 // endTime here doubles as the probe deadline (nowMs + openMillis), so a lost probe
                 // can self-heal (see HALF_OPEN branch) — no governance-side timer needed.
-                return transition(st, OPEN, HALF_OPEN, nowMs + cfg.openMillis);
+                boolean won = transition(st, OPEN, HALF_OPEN, nowMs + cfg.openMillis);
+                if (won) {
+                    // P1 fix: record this probe's generation so only its own release can resolve
+                    // HALF_OPEN. A stale release from a CLOSED-era request carries a prior generation
+                    // and is rejected in release() (prevents stale-release hijack of the probe).
+                    st.probeGen.set(brGen(st.breakerState.get()));
+                }
+                return won;
             }
             return false;
         }
@@ -55,6 +62,7 @@ public final class EwmaCircuitBreaker {
         // re-arm the OPEN cycle so a fresh probe is elected after openMillis — never stuck forever.
         if (nowMs >= brEnd(b)) {
             transition(st, HALF_OPEN, OPEN, nowMs + cfg.openMillis);
+            st.probeGen.set(-1L); // probe invalidated on re-arm
         }
         return false;
     }
@@ -63,7 +71,12 @@ public final class EwmaCircuitBreaker {
         long b = st.breakerState.get();
         int s = brState(b);
         if (s == HALF_OPEN) {
-            transition(st, HALF_OPEN, ok ? CLOSED : OPEN, ok ? 0L : nowMs + cfg.openMillis);
+            // P1 fix: only the elected probe's release (generation matches probeGen) may resolve
+            // HALF_OPEN. Stale releases from prior CLOSED/OPEN eras are ignored — they must NOT
+            // hijack the probe outcome by transitioning HALF_OPEN→CLOSED/OPEN prematurely.
+            if (brGen(b) == st.probeGen.get()) {
+                transition(st, HALF_OPEN, ok ? CLOSED : OPEN, ok ? 0L : nowMs + cfg.openMillis);
+            }
             return;
         }
         if (s == CLOSED) {

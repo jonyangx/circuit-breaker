@@ -61,39 +61,59 @@ public final class SystemOverload {
             throw new IllegalStateException(
                 "setShedPermilleForTest only allowed in test mode (-Dcircuitbreaker.testMode=true)");
         }
+        // AA §3.1 fix: range validation even in test mode prevents extreme values from corrupting
+        // graded shedding logic (e.g., permille=10000 would cause currentLevel to saturate while
+        // maybeShed() stays at 1000% cap, breaking the exitThreshold() calculation).
+        if (permille < 0 || permille > 1000) {
+            throw new IllegalArgumentException(
+                "permille must be in [0, 1000], got: " + permille);
+        }
         SHED_PERMILLE = permille;
         currentLevel = permille;
     }
 
     /** Start the low-frequency CPU probe daemon (BR-042: off the request hot path). */
     public static void startProbe() {
+        // First CAS: only the winning thread proceeds into the startup sequence.
         if (!probeRunning.compareAndSet(false, true)) {
-            return;
+            return; // another thread is already managing probe startup
         }
-        stopProbe = false;
-        Thread t = new Thread(() -> {
-            try {
-                probeLoop();
-            } finally {
-                probeRunning.set(false); // always release the slot on exit
+        try {
+            stopProbe = false;
+            Thread t = new Thread(() -> {
+                try {
+                    probeLoop();
+                } finally {
+                    probeRunning.set(false); // release slot on exit
+                }
+            }, "circuit-breaker-cpu-probe");
+            t.setDaemon(true);
+
+            // BR-043: ensure any previous probe thread has fully exited before we start.
+            // Prevents dual-probe race if stopProbe()+startProbe() is called in quick succession.
+            Thread prev = probeThread;
+            probeThread = t;
+            if (prev != null && prev.isAlive()) {
+                try {
+                    prev.join(2000); // wait up to 2s for the old thread to exit
+                } catch (InterruptedException ignored) {
+                    Thread.currentThread().interrupt();
+                }
             }
-        }, "circuit-breaker-cpu-probe");
-        t.setDaemon(true);
-        // BR-043: ensure any previous probe thread has fully exited before we start.
-        // Prevents dual-probe race if stopProbe()+startProbe() is called in quick succession.
-        Thread prev = probeThread;
-        probeThread = t;
-        if (prev != null && prev.isAlive()) {
-            try {
-                prev.join(2000); // wait up to 2s for the old thread to exit
-            } catch (InterruptedException ignored) {
-                Thread.currentThread().interrupt();
+
+            // Final stopProbe re-check: if stopProbe() was called during startup,
+            // abandon this probe and release the slot.
+            if (stopProbe) {
+                probeRunning.set(false);
+                return;
             }
+
+            t.start();
+        } catch (RuntimeException e) {
+            // Release slot on any exception so subsequent startProbe() can proceed.
+            probeRunning.set(false);
+            throw e;
         }
-        // After the old thread's join, its finally block has set probeRunning=false.
-        // Re-arm it so the new thread can run without immediate CAS loss.
-        probeRunning.set(true);
-        t.start();
     }
 
     public static void stopProbe() {
@@ -119,7 +139,7 @@ public final class SystemOverload {
             try {
                 if (os != null) {
                     double load = os.getCpuLoad(); // 0..1, or -1 if unavailable
-                    if (load >= 0) {
+                    if (load >= 0 && load <= 1.0) { // range-validate before sampling
                         onCpuSample(load * 100.0);
                     }
                 }

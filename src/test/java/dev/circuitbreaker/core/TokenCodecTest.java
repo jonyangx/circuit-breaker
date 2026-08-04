@@ -24,8 +24,8 @@ class TokenCodecTest {
     @Test
     void signBitAlwaysZero() {
         // max time field still must not set the sign bit → token >= 0 (BR-004).
-        // TIME_BITS=36 → max time is 2^36-1, shifted left 27 lands at bit62 (sign bit63 is 0).
-        long token = TokenCodec.encode(TokenCodec.TIME_MASK, 0x3FF, 0x3FF, 0xF, 0x7);
+        // TIME_BITS=27 → max time is 2^27-1, shifted left 36 lands at bit62 (sign bit63 is 0).
+        long token = TokenCodec.encode(TokenCodec.TIME_MASK, 0x3FF, 0x3FF, 0xF, 0xFFF);
         assertThat(token).isGreaterThanOrEqualTo(0L);
     }
 
@@ -46,9 +46,9 @@ class TokenCodecTest {
     }
 
     @Test
-    void maskTruncatedTo3Bits() {
-        long token = TokenCodec.encode(0, 0, 0, 0, 0x1F); // >3 bits
-        assertThat(TokenCodec.decodeMask(token)).isEqualTo(0x7);
+    void maskTruncatedTo12Bits() {
+        long token = TokenCodec.encode(0, 0, 0, 0, 0x1FFF); // >12 bits
+        assertThat(TokenCodec.decodeMask(token)).isEqualTo(0xFFF);
     }
 
     @Test
@@ -68,8 +68,9 @@ class TokenCodecTest {
         // C2: version is 10 bits — wraps at 1024 hot-swaps (was 64 at 6 bits). BR-052 ABA window.
         assertThat(TokenCodec.VERSION_MASK).isEqualTo(0x3FFL);
         assertThat(TokenCodec.VERSION_BITS).isEqualTo(10);
-        assertThat(TokenCodec.TIME_BITS).isEqualTo(36); // 1 bit borrowed for resourceId (37→36)
+        assertThat(TokenCodec.TIME_BITS).isEqualTo(27); // reduced to fit 12-bit mask + 10-bit resourceId
         assertThat(TokenCodec.RESOURCE_BITS).isEqualTo(10); // covers MAX_RESOURCES=1024
+        assertThat(TokenCodec.MASK_BITS).isEqualTo(12); // design §3.2: 12 bits for future extensibility
         // 1025 masks down to 1 (1025 & 0x3FF == 1)
         long token = TokenCodec.encode(0, 0, 1025, 0, 0);
         assertThat(TokenCodec.decodeVersion(token)).isEqualTo(1);
