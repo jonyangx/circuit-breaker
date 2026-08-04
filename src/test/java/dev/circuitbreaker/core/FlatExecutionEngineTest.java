@@ -23,7 +23,9 @@ class FlatExecutionEngineTest {
         long t2 = acquireOrFail(rid);
         assertThat(FlatExecutionEngine.tryAcquire(rid)).isEqualTo(BlockCode.CONCURRENCY); // 3rd blocked
         FlatExecutionEngine.release(rid, t1, true);
-        assertThat(FlatExecutionEngine.tryAcquire(rid)).isGreaterThanOrEqualTo(0); // freed
+        // Freed slot must be reusable; retry past per-segment cap collisions (limit=2 < SEG=16)
+        long t3 = acquireOrFail(rid);
+        FlatExecutionEngine.release(rid, t3, true);
         // token carries mask + version
         assertThat(TokenCodec.decodeMask(t1)).isEqualTo(0x04);
         assertThat(TokenCodec.decodeVersion(t1)).isEqualTo(1);

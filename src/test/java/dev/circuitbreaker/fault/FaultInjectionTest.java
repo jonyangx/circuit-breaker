@@ -98,7 +98,9 @@ class FaultInjectionTest {
         long c = acquireOrFail(rid);
         assertThat(FlatExecutionEngine.tryAcquire(rid)).isEqualTo(BlockCode.CONCURRENCY); // saturated → -4
         FlatExecutionEngine.release(rid, a, true);                 // drain one
-        assertThat(FlatExecutionEngine.tryAcquire(rid)).isGreaterThanOrEqualTo(0);         // freed
+        // Freed slot must be reusable; retry past per-segment cap collisions (limit=3 < SEG=16)
+        long t = acquireOrFail(rid);                               // must succeed after release
+        FlatExecutionEngine.release(rid, t, true);                 // release the re-acquired token
         FlatExecutionEngine.release(rid, b, true);
         FlatExecutionEngine.release(rid, c, true);
     }

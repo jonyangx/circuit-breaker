@@ -49,6 +49,29 @@ class CircuitBreakerOperatorTest {
                 .expectError(IllegalStateException.class)
                 .verify();
 
-        assertThat(ResourceManager.state(rid).sumConcurrency()).isZero(); // released via doOnError
+        assertThat(ResourceManager.state(rid).sumConcurrency()).isZero(); // released via doFinally
+    }
+
+    @Test
+    void cancelledSubscriptionReleasesSlotWithoutTrippingBreaker() {
+        // CB + CC resource: an adversarial client that subscribes and immediately cancels must
+        // release the concurrency slot (else it leaks forever) AND must not feed the breaker EWMA
+        // as a failure (else subscribe-then-cancel inflates the error rate and false-trips the
+        // breaker — AA Defect 1 availability attack).
+        int rid = ResourceManager.register(
+                new ResourceConfig(0x05, 0, 0, 500_000, 5, 1000, 1000, 2, 1));
+
+        for (int i = 0; i < 50; i++) {
+            StepVerifier.create(CircuitBreakerOperator.wrap(rid, () -> Mono.never()))
+                    .expectSubscription()
+                    .thenCancel()
+                    .verify();
+        }
+
+        // Every cancellation released its slot — nothing leaked.
+        assertThat(ResourceManager.state(rid).sumConcurrency()).isZero();
+        // CANCELLED carries no health signal: 50 cancels left the EWMA error rate at 0, so the
+        // breaker is still CLOSED and will serve real traffic normally.
+        assertThat(ResourceManager.state(rid).ewmaErrorRatePpm()).isZero();
     }
 }

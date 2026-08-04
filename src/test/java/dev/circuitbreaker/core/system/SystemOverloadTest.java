@@ -10,6 +10,11 @@ class SystemOverloadTest {
 
     @AfterEach
     void reset() {
+        // Defect 8 fix: reset ALL static state, not just SHED_PERMILLE. A test that starts the
+        // probe (or fails mid-flight) would otherwise leave probeThread running into the next
+        // test — onCpuSample() from the leaked thread mutates SHED_PERMILLE mid-assertion (flaky
+        // cross-test pollution). stopProbe() joins the thread; setShedPermilleForTest resets the level.
+        SystemOverload.stopProbe();
         SystemOverload.setShedPermilleForTest(0);
     }
 

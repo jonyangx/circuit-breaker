@@ -83,6 +83,38 @@ class LowTpsBreakerTest {
         assertThat(EwmaCircuitBreaker.brState(st.breakerState.get())).isEqualTo(EwmaCircuitBreaker.CLOSED);
     }
 
+    // ---- §6.2: long idle must fully decay the EWMA — one stale failure must not trip ----
+
+    /**
+     * Defect 2 regression: after an idle long enough to fully decay the EWMA (Δt > 8τ), a single
+     * failure must NOT trip the breaker. Before the fix, the sample count was preserved across the
+     * idle (count=4 → 5 on the next sample) while α=1 replaced the ppm — so one stale failure
+     * after the idle tripped a breaker that had seen no recent failures. The fix re-seeds (count=1)
+     * so minCalls must be re-earned with fresh samples.
+     */
+    @Test
+    void oneStaleFailureAfterLongIdleDoesNotTrip() {
+        ResourceConfig cfg = new ResourceConfig(0x01, 0, 0, 500_000, 5, 1000, 1000, 0, 1);
+        ResourceState st = new ResourceState();
+        EwmaCircuitBreaker.tryAcquire(st, cfg, 0);
+        // 4 τ-spaced failures: ppm high, count=4 < minCalls=5 → breaker stays CLOSED.
+        for (int i = 1; i <= 4; i++) {
+            EwmaCircuitBreaker.release(st, i * 1000L, false, cfg, true);
+        }
+        assertThat(EwmaCircuitBreaker.brState(st.breakerState.get())).isEqualTo(EwmaCircuitBreaker.CLOSED);
+
+        // Long idle Δt=10_000ms (10τ > 8τ): EWMA fully decays.
+        // A single failure at t=14000 must not trip: on the fixed build it re-seeds (count=1);
+        // on the buggy build count survives (4→5) and ppm=1.0M ≥ threshold → false OPEN.
+        EwmaCircuitBreaker.release(st, 14_000L, false, cfg, true);
+        assertThat(EwmaCircuitBreaker.brState(st.breakerState.get()))
+                .as("one stale failure after 10τ idle must not trip the breaker")
+                .isEqualTo(EwmaCircuitBreaker.CLOSED);
+        assertThat(EwmaCircuitBreaker.ewCount(st.ewmaState.get()))
+                .as("long idle must re-seed the sample count (minCalls re-earned from scratch)")
+                .isEqualTo(1);
+    }
+
     // ---- α at degenerate input (dtMs ≤ 0, tauMs ≤ 0) ----
 
     @Test

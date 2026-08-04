@@ -73,4 +73,25 @@ class SegmentedConcurrencyTest {
         assertThat(acquired.get()).isEqualTo(threads * perThread);
         assertThat(st.sumConcurrency()).isZero(); // every acquire rolled back → zero drift (BR-032)
     }
+
+    @Test
+    void doubleReleaseDoesNotUnderflow() {
+        ResourceState st = new ResourceState();
+        ResourceConfig c = cfg(1_000_000);
+        int bidx = SegmentedConcurrency.tryAcquire(st, c);
+        assertThat(bidx).isGreaterThanOrEqualTo(0);
+
+        SegmentedConcurrency.release(st, bidx);
+        SegmentedConcurrency.release(st, bidx); // caller bug: double release of the same token
+
+        // CAS-guard release refuses to decrement below zero — a negative counter would silently
+        // expand the effective concurrency limit (resource could exceed its configured cap forever).
+        assertThat(st.concurrency[bidx].get()).isZero();
+
+        // The segment still works for subsequent traffic.
+        int bidx2 = SegmentedConcurrency.tryAcquire(st, c);
+        assertThat(bidx2).isGreaterThanOrEqualTo(0);
+        SegmentedConcurrency.release(st, bidx2);
+        assertThat(st.sumConcurrency()).isZero();
+    }
 }

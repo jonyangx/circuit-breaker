@@ -22,7 +22,7 @@ public final class FlatExecutionEngine {
         if (resourceId < 0 || resourceId >= ResourceManager.MAX_RESOURCES) {
             throw new IllegalArgumentException("resourceId out of range: " + resourceId);
         }
-        ResourceState st = ResourceManager.STATES[resourceId];
+        ResourceState st = ResourceManager.STATES.get(resourceId);
         if (st == null) {
             throw new IllegalArgumentException("unregistered resourceId: " + resourceId);
         }
@@ -50,8 +50,11 @@ public final class FlatExecutionEngine {
                 return BlockCode.CONCURRENCY;
             }
         }
+        // Defect 6 fix: encode BEFORE counting. If encode threw (pathological timeMs/resourceId),
+        // passCount must not increment for a call that never got a token — count only after success.
+        long token = TokenCodec.encode(now, resourceId, cfg.version, bucketIdx, cfg.mask);
         st.passCount.increment(); // count only after all gates pass + token encoded (no passed-but-uncounted)
-        return TokenCodec.encode(now, resourceId, cfg.version, bucketIdx, cfg.mask);
+        return token;
     }
 
     public static void release(int resourceId, long token, boolean success) {
@@ -60,7 +63,7 @@ public final class FlatExecutionEngine {
         if (resourceId < 0 || resourceId >= ResourceManager.MAX_RESOURCES) {
             throw new IllegalArgumentException("resourceId out of range: " + resourceId);
         }
-        ResourceState st = ResourceManager.STATES[resourceId];
+        ResourceState st = ResourceManager.STATES.get(resourceId);
         if (st == null) {
             throw new IllegalArgumentException("unregistered resourceId: " + resourceId);
         }
@@ -90,6 +93,45 @@ public final class FlatExecutionEngine {
         if ((mask & ResourceConfig.MASK_CIRCUIT_BREAKER) != 0) {
             boolean versionMatch = (version == (cfg.version & TokenCodec.VERSION_MASK)); // BR-052
             EwmaCircuitBreaker.release(st, now, success, cfg, versionMatch);
+        }
+    }
+
+    public static void release(int resourceId, long token, Outcome outcome) {
+        // Delegates to the boolean path for SUCCESS/FAILURE; CANCELLED releases the concurrency
+        // slot but carries no health signal (a cancelled call never reached the downstream), so it
+        // must not pollute the breaker EWMA (AA Defect 1: subscribe-then-cancel availability attack).
+        if (outcome == Outcome.CANCELLED) {
+            releaseCancelled(resourceId, token);
+        } else {
+            release(resourceId, token, outcome == Outcome.SUCCESS);
+        }
+    }
+
+    private static void releaseCancelled(int resourceId, long token) {
+        if (resourceId < 0 || resourceId >= ResourceManager.MAX_RESOURCES) {
+            throw new IllegalArgumentException("resourceId out of range: " + resourceId);
+        }
+        ResourceState st = ResourceManager.STATES.get(resourceId);
+        if (st == null) {
+            throw new IllegalArgumentException("unregistered resourceId: " + resourceId);
+        }
+        if (token < 0) return; // blocked token carries no resource state to release (BR-004)
+
+        int bucketIdx = TokenCodec.decodeBucket(token);
+        int mask = TokenCodec.decodeMask(token);
+
+        int tokenRid = TokenCodec.decodeResourceId(token);
+        if (tokenRid != resourceId) {
+            throw new IllegalArgumentException(
+                "token/resourceId mismatch: token belongs to resource " + tokenRid +
+                " but release() was called with resourceId=" + resourceId +
+                " (possible cross-resource bug in reactive pipeline)");
+        }
+
+        // Same slot-release semantics as the success/failure path (token-embedded mask, BR-053),
+        // but deliberately skips the EWMA update — cancellation is not a health signal.
+        if ((mask & ResourceConfig.MASK_CONCURRENCY) != 0) {
+            SegmentedConcurrency.release(st, bucketIdx);
         }
     }
 }

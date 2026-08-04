@@ -11,7 +11,11 @@ import java.util.concurrent.atomic.AtomicReferenceArray;
 public final class ResourceManager {
     public static final int MAX_RESOURCES = 1024;
     static final AtomicReferenceArray<ResourceConfig> CONFIGS = new AtomicReferenceArray<>(MAX_RESOURCES);
-    static final ResourceState[] STATES = new ResourceState[MAX_RESOURCES];
+    // AA Defect 3 fix: STATES was a plain array — a non-volatile write in register() could be
+    // observed late by a consumer thread reading STATES[id] BEFORE its volatile CONFIGS.get(id),
+    // yielding "unregistered resourceId" for a just-registered id (the volatile read only orders
+    // accesses AFTER it). AtomicReferenceArray gives STATES the same volatile publication as CONFIGS.
+    static final AtomicReferenceArray<ResourceState> STATES = new AtomicReferenceArray<>(MAX_RESOURCES);
     private static int nextIdCounter = 0; // monotonic fast-path cursor (register is synchronized)
 
     private ResourceManager() {}
@@ -23,7 +27,7 @@ public final class ResourceManager {
             throw new IllegalStateException("resource limit reached: " + MAX_RESOURCES);
         }
         ResourceState st = new ResourceState();
-        STATES[id] = st;
+        STATES.set(id, st); // volatile publish (same visibility as CONFIGS.set below)
         if ((config.mask & ResourceConfig.MASK_RATE_LIMIT) != 0) {
             LazyTokenBucket.seed(st, config.capacity); // burst available immediately
         }
@@ -38,19 +42,18 @@ public final class ResourceManager {
         }
         // Defensive fallback in case deregistration is ever introduced.
         for (int i = 0; i < MAX_RESOURCES; i++) {
-            if (STATES[i] == null) {
+            if (STATES.get(i) == null) {
                 return i;
             }
         }
         return -1;
     }
-
     public static ResourceConfig config(int resourceId) {
         return CONFIGS.get(resourceId);
     }
 
     public static ResourceState state(int resourceId) {
-        return STATES[resourceId];
+        return STATES.get(resourceId);
     }
 
     /** Controlled RCU publish point (used by ConfigSwapper). BR-050. */

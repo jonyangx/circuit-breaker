@@ -2,6 +2,7 @@ package dev.circuitbreaker.reactive;
 
 import dev.circuitbreaker.core.FlatExecutionEngine;
 import dev.circuitbreaker.core.GovernanceException;
+import dev.circuitbreaker.core.Outcome;
 import reactor.core.publisher.Mono;
 import reactor.core.publisher.SignalType;
 
@@ -28,8 +29,17 @@ public final class CircuitBreakerOperator {
             }
             return source.get()
                     .doFinally(signal -> {
-                        boolean success = signal == SignalType.ON_COMPLETE;
-                        FlatExecutionEngine.release(resourceId, token, success);
+                        // AA Defect 1 fix: map each termination signal to a tri-state Outcome.
+                        // ON_COMPLETE → SUCCESS, ON_ERROR → FAILURE, CANCEL → CANCELLED (the call
+                        // never reached the downstream — its concurrency slot is freed but the
+                        // breaker EWMA is untouched, so subscribe-then-cancel cannot pollute the
+                        // error rate and false-trip the breaker).
+                        Outcome outcome = switch (signal) {
+                            case ON_COMPLETE -> Outcome.SUCCESS;
+                            case ON_ERROR -> Outcome.FAILURE;
+                            default -> Outcome.CANCELLED;
+                        };
+                        FlatExecutionEngine.release(resourceId, token, outcome);
                     });
         });
     }

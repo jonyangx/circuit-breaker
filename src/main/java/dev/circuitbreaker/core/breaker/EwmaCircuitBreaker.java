@@ -24,6 +24,13 @@ public final class EwmaCircuitBreaker {
     private static final int EW_COUNT_MAX = 0xFFFF; // 16-bit count field saturates (never wraps) — see EW_COUNT_MASK
     /** lastUpdateMs quantum: store nowMs>>4 so a 20-bit field spans 2^24 ms (4.66h) not 17.5min. */
     private static final int EW_LAST_Q_SHIFT = 4; // 16 ms per stored tick
+    /**
+     * Absolute floor for the long-idle re-seed. The relative threshold (8τ) alone degenerates at
+     * tiny τ (τ=1ms → any 8ms gap resets count, so minCalls never accumulates); a gap is only
+     * "genuine idle" if it also exceeds this physical floor. 100ms matches the PolicyBuilder
+     * openMillis floor — the minimum meaningful breaker time horizon.
+     */
+    private static final long EW_IDLE_RE_SEED_FLOOR_MS = 100;
 
     // ewmaState masks
     private static final long EW_GEN_MASK = 0xFFL, EW_LAST_MASK = 0xFFFFFL, EW_COUNT_MASK = 0xFFFFL, EW_PPM_MASK = 0xFFFFFL;
@@ -124,10 +131,28 @@ public final class EwmaCircuitBreaker {
             } else {
                 long dtQ = (nowQ - ewLast(cur)) & EW_LAST_MASK; // 20-bit modular, 16ms units
                 long dtMs = dtQ << EW_LAST_Q_SHIFT;           // back to ms for α computation
-                float a = EwmaAlpha.alpha(dtMs, cfg.ewmaTauMs);
-                int cnt = (int) Math.min(EW_COUNT_MAX, ewCount(cur) + 1); // saturate, never wrap (enables minCalls comparison)
-                int ppm = applyDecay(ewPpm(cur), xPpm, a);
-                next = packEwma(gNow, nowQ, cnt, ppm);
+                // Defect 2 fix: detect idle long enough to fully decay the EWMA and re-seed.
+                // This handles two cases: (a) genuine long idle within the 4.66h wrap period, and
+                // (b) wrap-aliased idle where the real gap is >4.66h but the modular subtraction
+                // presents a small dt. Without this, a stale high error rate survives and can
+                // falsely trip on the first recovery sample after a periodic multi-hour idle.
+                // Re-seeding matches the α=1 fully-decayed semantics and resets count so minCalls
+                // starts fresh, consistent with a clean state after a long gap.
+                //
+                // Guard: the gap must ALSO clear an absolute floor. The relative threshold 8τ alone
+                // is degenerate at tiny τ — with τ=1ms, any 8ms+ inter-arrival (ordinary traffic
+                // spacing) resets count, so minCalls can never accumulate and a sustained failure
+                // burst never trips (regression: ResourceIsolationTest). "Long idle" only makes
+                // sense above a physically meaningful gap; below the floor, samples are ordinary
+                // traffic and evidence accumulates normally.
+                if (dtMs > 0 && (dtMs >> 3) >= cfg.ewmaTauMs && dtMs >= EW_IDLE_RE_SEED_FLOOR_MS) {
+                    next = packEwma(gNow, nowQ, 1, xPpm);  // re-seed
+                } else {
+                    float a = EwmaAlpha.alpha(dtMs, cfg.ewmaTauMs);
+                    int cnt = (int) Math.min(EW_COUNT_MAX, ewCount(cur) + 1); // saturate, never wrap (enables minCalls comparison)
+                    int ppm = applyDecay(ewPpm(cur), xPpm, a);
+                    next = packEwma(gNow, nowQ, cnt, ppm);
+                }
             }
             if (st.ewmaState.compareAndSet(cur, next)) {
                 return;
@@ -164,7 +189,7 @@ public final class EwmaCircuitBreaker {
     /** Unpack ewma lastUpdateMs [36-55] (16ms quantum; multiply by 16 for absolute ms). */
     private static long ewLast(long e) { return (e >>> EW_LAST_SHIFT) & EW_LAST_MASK; }
     /** Unpack ewma sample count [20-35]. */
-    private static int ewCount(long e) { return (int) ((e >>> EW_COUNT_SHIFT) & EW_COUNT_MASK); }
+    static int ewCount(long e) { return (int) ((e >>> EW_COUNT_SHIFT) & EW_COUNT_MASK); }
     /** Unpack ewma error-rate ppm [0-19]. */
     static int ewPpm(long e) { return (int) (e & EW_PPM_MASK); }
 }

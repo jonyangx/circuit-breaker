@@ -15,10 +15,24 @@ public final class ConfigSwapper {
      * Swap in a new immutable config. Enforces version monotonicity so that in-flight releases
      * never see a stale-version token accepted as current (BR-050/052).
      *
-     * @throws IllegalArgumentException if {@code newConfig.version} is not strictly greater than the
-     *         currently published version.
+     * @throws IllegalArgumentException if {@code resourceId} is out of range or
+     *         {@code newConfig.version} is not strictly greater than the currently published version.
+     * @throws IllegalStateException if {@code resourceId} has not been registered — swapping a config
+     *         for an unregistered resource would publish CONFIGS[id] while STATES[id] stays null,
+     *         violating the config/state co-presence invariant the hot path relies on.
      */
     public static void swap(int resourceId, ResourceConfig newConfig) {
+        if (resourceId < 0 || resourceId >= ResourceManager.MAX_RESOURCES) {
+            throw new IllegalArgumentException("resourceId out of range: " + resourceId);
+        }
+        // Defect 1 fix: a swap must only publish a config for a registered resource. Otherwise
+        // CONFIGS[id] becomes non-null while STATES[id] remains null, and the next tryAcquire(id)
+        // throws IllegalArgumentException ("unregistered resourceId") — a config/state inconsistency
+        // that cannot occur through register() alone. Rejecting the swap up front keeps the
+        // co-presence invariant intact and surfaces the caller's bug at the swap site.
+        if (ResourceManager.state(resourceId) == null) {
+            throw new IllegalStateException("resource not registered: " + resourceId);
+        }
         ResourceConfig current;
         ResourceConfig published;
         do {

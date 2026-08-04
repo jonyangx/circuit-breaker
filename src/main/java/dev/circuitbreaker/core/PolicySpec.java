@@ -149,6 +149,14 @@ public final class PolicySpec {
             out.add(new Finding(Level.OK, "S6",
                 "qps=" + cfg.qps + " is a multiple of 1000; ms-floor truncation delivers exact rate"));
         }
+        // Defect 7 fix: capacity < qps means the bucket can't hold even one second of burst.
+        // Not an error (rate-limit still functions at steady state), but a config smell the
+        // operator should notice — flag it as a WARN alongside the S6 floor finding.
+        if (cfg.capacity > 0 && cfg.capacity < cfg.qps) {
+            out.add(new Finding(Level.WARN, "S8",
+                "capacity=" + cfg.capacity + " < qps=" + cfg.qps
+                    + "; bucket holds less than 1s of burst — burst traffic will be shed aggressively"));
+        }
     }
 
     // ---- S2: concurrency vs Little's law (qps × RT) ----

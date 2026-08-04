@@ -44,8 +44,13 @@ public final class PolicyBuilder {
     public PolicyBuilder sla(PolicySpec.SlaFacts facts) { this.slaFacts = facts; return this; }
 
     public ResourceConfig build() {
-        if (openMillis <= 0) {
-            throw new IllegalArgumentException("openMillis must be > 0");
+        // Defect 4 fix: openMillis too small → probe-timeout livelock. When openMillis < business RT,
+        // a HALF_OPEN probe never completes before its endTime, so the breaker flips back to OPEN and
+        // re-elects a probe forever — the breaker never recovers. Enforce a floor that keeps the
+        // self-healing window (>= 2-3x typical RT) meaningful.
+        if (openMillis < 100) {
+            throw new IllegalArgumentException(
+                "openMillis must be > 0 (>= 100ms to avoid probe-timeout livelock), got: " + openMillis);
         }
         if ((mask & ResourceConfig.MASK_RATE_LIMIT) != 0 && qps <= 0) {
             throw new IllegalArgumentException("qps must be > 0");

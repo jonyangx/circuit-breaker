@@ -24,14 +24,18 @@ public final class SegmentedConcurrency {
      *   2. Per-segment cap: limitPerSeg = ceil(concurrencyLimit / SEG)
      *      Bounds worst-case overshoot to SEG-1 when limit ≫ SEG
      *      When limit < SEG, limitPerSeg = 1 ensures single-token-per-segment (no hot-segment saturation)
-     *   3. Increment the probed segment (optimistic, no CAS)
-     *   4. Compute total concurrency (segment sum, O(16) lock-free read)
-     *   5. Global limit check: if total > concurrencyLimit, rollback (decrement) and block
+     *   3. Pessimistic pre-check (AA Defect 3): if the global total is already at the limit, reject
+     *      without touching segment counters — kills the rollback storm at tight limits
+     *   4. Increment the probed segment (optimistic, no CAS)
+     *   5. Compute total concurrency (segment sum, O(16) lock-free read)
+     *   6. Global limit check: if total > concurrencyLimit, rollback (decrement) and block
      *
      * Why increment-then-check (not check-then-increment)?
      *   - Pre-check on total is racy (another thread may increment concurrently)
      *   - Increment-then-check is exact: we see the post-increment total and enforce the limit atomically
      *   - Rollback on overflow is O(1) and rare (only when limit is tight)
+     *   - The pre-check is a fast-path rejection, not a guarantee: it only filters the common
+     *     already-saturated case; the increment-then-check remains the correctness backstop
      *
      * Performance: O(16) segment sum on the happy path (1 microop per iteration) — still nanosecond-scale.
      * Alternative: a global LongAdder for exact total, but that adds contended hot-path writes.
@@ -43,6 +47,13 @@ public final class SegmentedConcurrency {
         // When concurrencyLimit < SEG, limitPerSeg = 1 → single token per segment (no hot-segment saturation)
         int limitPerSeg = (int) Math.ceil(cfg.concurrencyLimit / (double) ResourceState.SEG);
         if (st.concurrency[bidx].get() >= limitPerSeg) {
+            return -1;
+        }
+
+        // AA Defect 3 fix: pessimistic pre-check — if the global total is already at the limit,
+        // reject without touching the segment counters. Eliminates the rollback storm under
+        // sustained contention at a tight limit (increment → sum → decrement churn).
+        if (st.sumConcurrency() >= cfg.concurrencyLimit) {
             return -1;
         }
 
@@ -64,6 +75,19 @@ public final class SegmentedConcurrency {
     }
 
     public static void release(ResourceState st, int bucketIdx) {
-        st.concurrency[bucketIdx].decrementAndGet();
+        // AA Defect N3 fix: CAS-loop release that refuses to decrement below zero. A double-release
+        // (caller bug) previously pushed the counter negative, silently corrupting the concurrency
+        // limit (a resource could exceed its configured cap forever). Underflow is impossible on
+        // the happy path — this only costs one extra get() per release.
+        for (;;) {
+            int cur = st.concurrency[bucketIdx].get();
+            if (cur <= 0) {
+                return; // defensive: double-release or stale segment — do not go negative
+            }
+            if (st.concurrency[bucketIdx].compareAndSet(cur, cur - 1)) {
+                return;
+            }
+        }
     }
+
 }

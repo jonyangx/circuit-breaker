@@ -100,3 +100,66 @@
 ## 一句话总结
 
 > **读代码之前别下结论；质疑自己比质疑别人更出活；测试要能区分对错；改 normative 常量必须全仓 grep；每次修复都再问一遍"我新破了什么"。**
+
+---
+
+## 11. 工作树被外部进程改写：把"文件完整性"当一等公民
+
+**事件**（2026-08-04 e2e 会话）：开工时发现全部 60 个 `src/**/*.java` 变成二进制垃圾（`%TSD-Header-###%` 头 + 12KB blob），`git checkout --` 无法恢复（环境问题），只能用 `git show HEAD:<path> > <path>` 逐文件恢复。更诡异的是**恢复后几分钟文件会再次变坏**——并发进程（`wrdlv4.exe`/`ztsmtbsclient.exe`，疑似 DLP/同步 agent）持续改写工作树，且只命中它碰过的 4 个文件；本会话自己写的 `.java` 从未被污染。
+
+**教训**：
+- **跑测试/提交前必须做完整性扫描**：`for f in $(git ls-files 'src/**/*.java'); do head -c 20 "$f" | grep -q "TSD-Header" && echo "CORRUPT: $f"; done`。`file` 命令在此环境不可靠（曾报"0 个有效源文件"而编译却通过），用头字节判据。
+- **`git checkout --` 失败时换 `git show HEAD:path > path`**——同是"从 HEAD 恢复"，后者在此环境可用。
+- 恢复会丢失未提交的合法工作；**恢复前先 `git diff` 存档**，恢复后逐文件核对哪些是并发 agent 的合法修改（如 `EwmaCircuitBreaker` 的 EWMA re-seed），保留正确的、只丢弃损坏的。
+- 对"会被外部改写"的树，**信任每一次 `read` 的快照标签，编辑前重读**；多个 agent 同时写同一文件时，编辑工具的回显可能与磁盘不符，必须回读验证。
+
+---
+
+## 12. review 报告说"已修复"≠ 代码里真的修了
+
+**事件**：`CODE_REVIEW_AA_COMPREHENSIVE.md` 声称多个缺陷"已修复"（Outcome 三态、SegmentedConcurrency 悲观预检 + 下溢守卫、EWMA 长空闲 re-seed），但逐一对照 `git diff` 后发现：**Outcome.java 是损坏的二进制、从未被任何代码引用**（`CircuitBreakerOperator.wrap` 仍用 `boolean success`），SegmentedConcurrency 只有 69 行、review 引用的"49-67/80-91 行"根本不存在；`ConfigSwapper` 的校验确实在（上一个 session 的未提交工作）。三个"已修复"里只有一个是真的。
+
+**教训**：
+- review 报告的**状态字段（"已修复/未修复"）是叙述，不是事实**。判定标准只有一条：`git diff` + 运行中的测试。引用"文件:行"的 claim，先验证那行真的存在。
+- 更狠的一招：**编译级验证**——report 说 `Outcome` 已接入，但 `grep` 全仓 `Outcome.` 零引用，编译也证明它没被接线。用"能否编译 + 行为测试是否覆盖"来戳穿叙述性状态。
+- 交接时报告一个"乐观状态"是人类常态（尤其 AI 生成的交接文档），**接手方必须假设所有"已修复"都需要复核**，成本远低于信任一个错的 claim。
+
+---
+
+## 13. 防御性守卫会创造自己的反面：EWMA re-seed 的 8τ 退化
+
+**事件**：并发 agent 给 `EwmaCircuitBreaker.updateEwma` 加"长空闲 re-seed"守卫：`(dtMs >> 3) >= cfg.ewmaTauMs` 时重置 count=1，防止多小时后一条过期失败误跳闸。这个相对阈值在 **τ=1ms 时完全退化**——任何 8ms+ 的请求间隔（普通流量！）都触发 re-seed，`minCalls` 永远凑不齐，`ResourceIsolationTest` 两个用例当场红了（`expected -2 but was <token>`：断路器面对持续失败流量永不跳闸）。
+
+**教训**：
+- **相对阈值必须有绝对下限**。`>8τ` 只表达"相对 EWMA 窗口的空闲"，对微小 τ 是物理上荒谬的"空闲"；最终守卫是 `dtMs ≥ 8τ && dtMs ≥ 100ms` 双条件。
+- **给"防御性守卫"写测试时，先问它会不会把正常流量误伤成攻击流量**。re-seed 的本意是防"过期失败误跳闸"，副作用却是"稀疏持续失败永不跳闸"——两种症状在同一行代码里。
+- 修改共享热路径（`updateEwma`）后**必须跑全量**，不能只跑新增测试：`ResourceIsolationTest` 用的是 τ=1ms 的"快反应"配置，恰好踩中守卫退化面，而新写的 re-seed 测试（τ=1000ms）永远测不出来。
+- 并发 agent 的"修复"同样要过这套审查——**不是自己的 diff 也不能免检**。
+
+---
+
+## 14. 修复的"验证力"与测试的"防护力"都要量化
+
+**事件**：会话早期观察到两个 flaky 测试：`FaultInjectionTest.concurrencySaturationFault`（limit<SEG=16 → limitPerSeg=1，释放 3 个槽中 1 个后裸 `tryAcquire` 撞上被占 segment，P≈2/16≈12.5% 假失败）和 `FlatExecutionEngineTest.concurrencyBlocksAndReleasesViaEngine`（P≈1/16≈6.25%）。修复：把"裸 assert 单次 acquire"改成复用已有的 `acquireOrFail` 重试 helper。
+
+**教训**：
+- **flaky 修复必须能量化验证**：两次修复分别有 ~12.5% 和 ~6.25% 的旧失败率，连续 3 轮全量跑（244×3=732 次测试）0 失败——如果旧 bug 仍在，3 轮全绿的联合概率仅 ~66%，这本身就是证据强度。
+- **重试 helper 改测试而不是放宽断言**：测试意图是"释放腾出槽位"，`acquireOrFail` 保留意图、消除随机性；放宽为 `isGreaterThanOrEqualTo(0)` 会吞掉真实回归。
+- **审计同类模式时量化风险**：其余 `isGreaterThanOrEqualTo(0)` 的 acquire assert 逐一核对——limit=1_000_000（segment 永不饱和）或全量释放（segment 全空）才安全，否则同样有概率性假失败。
+
+---
+
+## 15. 静态可观测性：测试直接断言"发布可见性"字段类型
+
+**事件**：Defect 3 把 `ResourceManager.STATES` 从普通数组改成 `AtomicReferenceArray`——`register()` 里非 volatile 写 `STATES[id]=st` 可能被消费者线程晚观察（其后的 `CONFIGS.set` 是 volatile，只排序其后的访问），导致刚注册的 id 报"unregistered"。
+
+**教训**：
+- **发布/消费共享状态时，写序必须保证"状态先于配置可见"**：`STATES.set(id, st)` 在 `CONFIGS.set(id, config)` 之前（两者都 volatile），消费者先读 CONFIGS 命中、后读 STATES 必命中。
+- 这类可见性修复**无法用行为测试直接证明**（需要真实内存序竞争），但可以被"类型即契约"测试守护：断言 `STATES` 是 `AtomicReferenceArray` 实例——把"字段类型"变成可断言的架构不变量，与 lesson 7 的守卫测试同族。
+- 迁移 `STATES[...]` → `STATES.get(...)` 必须全仓 grep 调用点（lesson 8 同款），`FlatExecutionEngine` 三处、`ResourceManager` 两处都是这么漏不掉、也改不错的。
+
+---
+
+## 一句话总结（2026-08-04 增补）
+
+> **文件完整性优先于一切；review 的"已修复"要过 git diff 复核；防御性守卫要给相对阈值加绝对下限；flaky 修复用联合概率量化证据；共享状态的发布可见性用"类型即契约"守护。**

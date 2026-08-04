@@ -70,4 +70,27 @@ class ConfigSwapperTest {
         ConfigSwapper.swap(rid, new ResourceConfig(0x02, 2000, 2000, 0, 1, 1000, 1000, 0, 4));
         assertThat(ResourceManager.config(rid).version).isEqualTo(4);
     }
+
+    @Test
+    void swapOnUnregisteredResourceThrows() {
+        ResourceConfig cfg = new ResourceConfig(0x02, 1000, 1000, 0, 1, 1000, 1000, 0, 1);
+        int unregistered = ResourceManager.MAX_RESOURCES - 1; // no register() call → STATES[id]==null
+        assertThat(ResourceManager.state(unregistered)).isNull();
+
+        // Defect 1 fix: swapping a config for an unregistered resource must be rejected up front,
+        // preserving the CONFIGS/STATES co-presence invariant (CONFIGS[id] never non-null while
+        // STATES[id] is null — otherwise tryAcquire would throw IllegalArgumentException).
+        assertThatThrownBy(() -> ConfigSwapper.swap(unregistered, cfg))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("not registered");
+        assertThat(ResourceManager.config(unregistered)).isNull(); // nothing published
+
+        // Out-of-range resourceId is rejected with IllegalArgumentException (consistent with tryAcquire).
+        assertThatThrownBy(() -> ConfigSwapper.swap(-1, cfg))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("out of range");
+        assertThatThrownBy(() -> ConfigSwapper.swap(ResourceManager.MAX_RESOURCES, cfg))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("out of range");
+    }
 }
