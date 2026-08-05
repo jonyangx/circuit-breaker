@@ -16,7 +16,7 @@
 | 规则 ID | 规则名称 | 规则描述 | 适用用例 | 来源 |
 |---------|---------|---------|---------|------|
 | BR-023-mincalls-threshold | 冷启动门槛 | count 字段用作 `minCalls` 门槛（样本不足前禁止跳闸），饱和于 65535 | UC-005 | design §4.3.2 |
-| BR-025-state-machine | 三态状态机 | CLOSED/OPEN/HALF_OPEN；唯一改 generation 的入口是 transition()；探路门闩保证 HALF_OPEN 至多一个在途探路；**HALF_OPEN 探路截止（endTime=进入时刻+openMillis）过期则惰性回退 OPEN 重选探路——丢失探路自愈，无定时器（代码实现更新，对抗性审查 A1）** | UC-005 | design §4.3.3 |
+| BR-025-state-machine | 三态状态机 | CLOSED/OPEN/HALF_OPEN；唯一改 generation 的入口是 transition()；探路门闩保证 HALF_OPEN 至多一个在途探路；**HALF_OPEN 探路截止（endTime=进入时刻+openMillis）过期则惰性回退 OPEN 重选探路——丢失探路自愈，无定时器（代码实现更新，对抗性审查 A1）**；**re-arm 仅当 transition() 成功才置 probeGen=-1（P2 修复：无条件 set 在极端调度下可覆盖新探路的合法 probeGen）** | UC-005 | design §4.3.3 |
 
 #### 2.3 推断规则
 | 规则 ID | 规则名称 | 规则逻辑 | 适用用例 | 来源 |
@@ -80,3 +80,4 @@ BR-024-generation-aba ← BR-025-state-machine(transition gen++)
 | 版本 | 日期 | 变更内容 | 变更原因 | 变更人 |
 |------|------|---------|---------|--------|
 | 1.0 | 2026-07-30 | 初始版本 | - | Phase 1 |
+| 1.1 | 2026-08-05 | 新增 P2 修复（re-arm 仅迁移成功时置 probeGen=-1） | 消除极端调度下覆盖合法 probeGen 的竞态窗口 | 代码审查 |

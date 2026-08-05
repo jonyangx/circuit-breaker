@@ -8,7 +8,7 @@
 - **总 Domain 数**: 1（单一内聚流量治理库，单一限界上下文；多 Domain 准则不适用）
 - **本次增量任务数**: 3
 - **执行状态**: completed
-- **最后更新时间**: 2026-08-02
+- **最后更新时间**: 2026-08-05
 
 ## 执行进度概览 (Progress Overview)
 - **已完成增量任务**: 3 / 3
@@ -52,3 +52,35 @@
 
 ## 断点续做说明
 本次增量 3 任务已全部 completed。若后续代码再次变更，重跑 `/ease:analyze-code` 将基于本 workplan 与现有 `001-circuit-breaker` 继续增量（扫描下一子领域编号、不重建既有内容）。
+
+---
+
+## 增量任务列表（2026-08-05 对抗性审查修复）
+
+> **触发**：对抗性代码审查发现 P1-P4 真实缺陷并实施修复（commit `d33c102`）。
+
+### 任务 A: 增量更新 007-reactive-adapter/rules.md — completed
+- **状态**: completed
+- **触发**: P1 — CircuitBreakerOperator.wrap() source.get() 同步异常导致 token 泄漏
+- **产出**: 新增 BR-062（防御同步异常不泄漏）规则 + 详细说明 + 回归测试引用
+
+### 任务 B: 增量更新 003-circuit-breaking/rules.md — completed
+- **状态**: completed
+- **触发**: P2 — HALF_OPEN re-arm 的 probeGen 无条件 set(-1) 竞态
+- **产出**: BR-025 补充 re-arm 仅迁移成功时置 probeGen=-1
+
+### 任务 C: 增量更新 005-system-overload/rules.md — completed
+- **状态**: completed
+- **触发**: P4 — 探针 join 超时可配置化
+- **产出**: 新增 BR-042a（探针退出超时可配置）规则
+
+### 任务 D: 增量更新 001-resource-lifecycle/rules.md — completed
+- **状态**: completed
+- **触发**: P3 — ResourceManager.register null 参数防御
+- **产出**: BR-001 补充 register 拒绝 null 配置
+
+### 任务 E: 增量更新 analyze-code-output.md — pending
+- **状态**: pending
+- **内容**: 新增 P1-P4 修复的技术洞察到分析报告
+
+若后续代码再次变更，继续基于本 workplan 增量更新。

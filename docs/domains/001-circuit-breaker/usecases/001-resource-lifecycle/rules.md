@@ -11,7 +11,7 @@
 
 | 规则 ID | 规则名称 | 规则描述 | 适用用例 | 来源 |
 |---------|---------|---------|---------|------|
-| BR-001-resource-id-int | 整数 resourceId 寻址 | 资源用全局唯一整数 `resourceId`（0..1023）标识，经 `CONFIGS[]`/`STATES[]` 数组寻址，禁止 Map 查找 | UC-001 | design §3.3 |
+| BR-001-resource-id-int | 整数 resourceId 寻址 | 资源用全局唯一整数 `resourceId`（0..1023）标识，经 `CONFIGS[]`/`STATES[]` 数组寻址，禁止 Map 查找；`register(config)` 入口拒绝 null 配置（IAE），STATES/CONFIGS 用 `AtomicReferenceArray` 保证发布可见性 | UC-001 | design §3.3 |
 | BR-002-config-state-separation | 配置/状态分离 | `CONFIGS`（不可变、可 RCU 热换）与 `STATES`（长生命周期、规则变更时永不重建）分离；严禁把可变运行时状态耦合进可替换 Config | UC-001, UC-008 | design §3.1 / §8 |
 | BR-003-token-encoding | 64 位 token 位布局 | `[sign:1][time:37][version:10][bucketIdx:4][mask:12]`，符号位恒 0；位宽/偏移为编译期常量（C2 扩位：version 6→10 / time 41→37，回绕点 1024 次热更） | UC-002, UC-003 | design §3.2.1 |
 | BR-004-block-code-negative | 阻断码全负 | `BLOCK_SYSTEM_OVERLOAD=-1`、`BLOCK_CIRCUIT_BREAKER=-2`、`BLOCK_RATE_LIMITER=-3`、`BLOCK_CONCURRENCY=-4`；`token<0` 即阻断。**块码→类型化异常经统一 `GovernanceException.forToken/throwFor`（base + 4 子类）；reactive `CircuitBreakerOperator` 亦经此映射，不再用独立异常类（代码实现更新，对抗性审查 D4）** | UC-002 | design §4.1 |
@@ -58,6 +58,7 @@ BR-003-token-encoding → BR-004-block-code-negative(符号位)
 | 版本 | 日期 | 变更内容 | 变更原因 | 变更人 |
 |------|------|---------|---------|--------|
 | 1.0 | 2026-07-30 | 初始版本 | - | Phase 1 |
+| 1.1 | 2026-08-05 | BR-001 补充：register 拒绝 null 配置（IAE） | P3：空配置延迟 NPE 改为入口立即 IAE | 代码审查 |
 
 ### 7. 附录
 * **术语：** 见 `docs/domains/001-circuit-breaker/analyze-brd-output.md` Glossary。
