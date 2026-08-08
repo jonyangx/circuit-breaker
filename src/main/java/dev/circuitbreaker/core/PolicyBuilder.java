@@ -16,7 +16,12 @@ public final class PolicyBuilder {
     private long qps = 0;
     private long capacity = 0;
     private int errThresholdPpm = 0;
-    private int minCalls = 1;
+    // P1 fix (AA §2.4 / SA LT-4): default cold-start sample floor aligned with PolicySpec S5
+    // (minCalls >= 10 = OK, < 3 = ERROR). The old default of 1 meant a single failure right after
+    // cold start / long idle (dt≈uptime → α≈0.63+, ppm≈630k, count=1≥1) tripped the breaker and
+    // blocked ALL traffic — and it silently violated the library's own S5 ERROR line. A default
+    // must never trip on one early failure; require a meaningful sample floor.
+    private int minCalls = 10;
     private long openMillis = 5_000L;
     private long ewmaTauMs = 5_000L;
     private int concurrencyLimit = 0;

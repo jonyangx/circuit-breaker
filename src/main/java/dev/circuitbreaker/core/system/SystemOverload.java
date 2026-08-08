@@ -92,7 +92,15 @@ public final class SystemOverload {
                 try {
                     probeLoop();
                 } finally {
-                    probeRunning.set(false); // release slot on exit
+                    // AA §2.5 (LC-3) fix: identity-checked release — only the CURRENT probe thread
+                    // may clear the running flag. If a newer probe has already taken over
+                    // (probeThread was reassigned while this thread was stuck past the join(2000)
+                    // window, and startProbe started a fresh thread), this stale thread's exit must
+                    // NOT clear the new probe's flag — otherwise the next startProbe's CAS would
+                    // succeed and spawn a third probe (unbounded probe growth under extreme pauses).
+                    if (probeThread == Thread.currentThread()) {
+                        probeRunning.set(false);
+                    }
                 }
             }, "circuit-breaker-cpu-probe");
             t.setDaemon(true);
@@ -106,6 +114,15 @@ public final class SystemOverload {
                     prev.join(PROBE_JOIN_TIMEOUT_MS);
                 } catch (InterruptedException ignored) {
                     Thread.currentThread().interrupt();
+                }
+                // AA §2.5 (LC-3) fix: if the old probe did not exit within the join window
+                // (GC STW / OS scheduling pause > 2s), force-wake it with an interrupt so it
+                // exits via the InterruptedException path in probeLoop() — it must not keep
+                // running as a second probe writing SHED_PERMILLE. With the identity-checked
+                // finally above, even if the old thread lingers its exit cannot clear the new
+                // probe's running flag (bounded transient coexistence, no unbounded growth).
+                if (prev.isAlive()) {
+                    prev.interrupt();
                 }
             }
 
@@ -136,9 +153,17 @@ public final class SystemOverload {
             } catch (InterruptedException ignored) {
                 Thread.currentThread().interrupt();
             }
+            // AA §2.5 (LC-3) symmetric liveness hardening: a probe stuck past the join window
+            // would otherwise keep probeRunning=true forever, blocking every future startProbe.
+            // Force-wake it; probeLoop() exits on InterruptedException and the identity-checked
+            // finally clears the flag (probeThread still == this thread).
+            if (t.isAlive()) {
+                t.interrupt();
+            }
         }
-        // After join returns, the thread's finally block has set probeRunning=false,
-        // allowing startProbe() to proceed safely.
+        // After join returns, the thread's finally block has set probeRunning=false (normal path),
+        // allowing startProbe() to proceed safely. In the stuck-thread path the interrupt above
+        // drives the same exit asynchronously.
     }
 
     private static void probeLoop() {

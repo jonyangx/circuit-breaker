@@ -136,6 +136,41 @@ class TpsDynamicsTokenBucketTest {
     }
 
     /**
+     * TA-3 (AA §2.7): a large forward clock jump (GC STW / suspend) must saturate the bucket to
+     * capacity — NO token storm beyond the burst, NO 22-bit token-field overflow (refillTokens'
+     * saturation guard returns cap when dtMs ≥ TOKEN_MASK+1), and NO borrowing of future tokens.
+     * Time field (42 bits) must advance to the new now without corruption.
+     */
+    @Test
+    void extremeForwardJumpCapsTokensAtCapacityWithoutStorm() {
+        ResourceState st = new ResourceState();
+        ResourceConfig c = cfg(1000, 1000);
+        // Drain the bucket.
+        for (int i = 0; i < 1000; i++) {
+            LazyTokenBucket.tryAcquire(st, c, 1000L);
+        }
+        assertThat(LazyTokenBucket.tryAcquire(st, c, 1000L)).isFalse(); // fully drained
+
+        // Extreme forward jump: 2^31 ms ≈ 24.8 days. dtMs ≥ TOKEN_MASK+1 → refill saturates to cap.
+        long hugeNow = 1000L + (1L << 31);
+        int passed = 0;
+        for (int i = 0; i < 1000; i++) {
+            if (LazyTokenBucket.tryAcquire(st, c, hugeNow)) passed++;
+        }
+        assertThat(passed)
+                .as("forward jump must refill at most capacity (no token storm)")
+                .isEqualTo(1000);
+        assertThat(LazyTokenBucket.tryAcquire(st, c, hugeNow))
+                .as("must not borrow future tokens after the burst")
+                .isFalse();
+
+        long tLast = st.bucketState.get() >>> LazyTokenBucket.TIME_SHIFT;
+        long tok = st.bucketState.get() & LazyTokenBucket.TOKEN_MASK;
+        assertThat(tLast).as("tLast must advance to the jumped-to time").isEqualTo(hugeNow);
+        assertThat(tok).as("token field must be back to 0 after consuming the burst").isZero();
+    }
+
+    /**
      * §9.6: Reverse clock — nowMs goes backward.
      * N3 clamps dt = max(0, now - tLast) to 0 on a backward jump, so add = 0 and a drained
      * bucket blocks (nTok < 1) without corrupting state. Previously the raw negative dt produced

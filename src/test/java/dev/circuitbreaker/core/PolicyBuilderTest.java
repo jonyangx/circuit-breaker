@@ -1,5 +1,6 @@
 package dev.circuitbreaker.core;
 
+import java.util.List;
 import org.junit.jupiter.api.Test;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -46,6 +47,25 @@ class PolicyBuilderTest {
                 .isInstanceOf(IllegalArgumentException.class);
         assertThatThrownBy(() -> new PolicyBuilder().enableConcurrency(0).openMillis(0).build())
                 .isInstanceOf(IllegalArgumentException.class);
+    }
+
+    @Test
+    void defaultMinCallsMeetsS5ColdStartFloor() {
+        // P1 regression (AA §2.4 / SA LT-4): a breaker config built WITHOUT .minimumCalls() must
+        // NOT default to 1 (which lets a single cold-start / post-idle failure trip the breaker,
+        // blocking ALL traffic). Default must be >= the S5 ERROR line (3), and should sit at the
+        // S5 WARN line (10) so the default config is not even flagged.
+        ResourceConfig c = new PolicyBuilder().enableCircuitBreaker(0.5f).build();
+        assertThat(c.minCalls)
+                .as("default minCalls must not allow a single early failure to trip the breaker")
+                .isGreaterThanOrEqualTo(3);
+
+        // S5 (PolicySpec) must not flag the default as an ERROR-level violation.
+        PolicySpec.SlaFacts sla = new PolicySpec.SlaFacts(10_000, 50, 100, 1000);
+        List<PolicySpec.Finding> findings = PolicySpec.check(c, sla);
+        assertThat(findings)
+                .as("default minCalls must satisfy the S5 cold-start floor (no ERROR)")
+                .noneMatch(f -> f.level == PolicySpec.Level.ERROR && f.rule.equals("S5"));
     }
 
     // ---- opt-in SLA invariant enforcement (PolicySpec integration) ----

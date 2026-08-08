@@ -92,4 +92,73 @@ class SystemOverloadTest {
         SystemOverload.startProbe();
         SystemOverload.stopProbe();
     }
+
+    @Test
+    void rapidStopStartCyclesDoNotLeakProbeThreads() throws InterruptedException {
+        // LC-3 regression (AA §2.5): repeated stop()/start() in quick succession must not leak
+        // probe threads. The identity-checked finally guarantees a stale thread's exit cannot clear
+        // a newer probe's running flag, and the join-timeout interrupt force-wakes any stuck thread
+        // — so after the dust settles at most ONE probe thread may be alive (never unbounded growth).
+        for (int i = 0; i < 6; i++) {
+            SystemOverload.startProbe();
+            Thread.sleep(20);
+            SystemOverload.stopProbe();
+        }
+        Thread.sleep(150); // let any interrupted/draining thread fully exit
+
+        assertThat(countProbeThreads())
+                .as("rapid stop/start cycles must never accumulate multiple probe threads")
+                .isLessThanOrEqualTo(1);
+    }
+
+    @Test
+    void interruptedProbeExitsViaInterruptPathAndRestartsCleanly() throws InterruptedException {
+        // LC-3 join(2000)-timeout path (AA §2.5): when a probe is stuck past the join window
+        // (GC STW / OS pause > 2s), stopProbe/startProbe force-wake it with interrupt; probeLoop()
+        // exits on InterruptedException and the identity-checked finally clears the running flag
+        // (probeThread == currentThread). The slot is released so a fresh probe can start — no
+        // unbounded probe growth, no flag loss. This is the DA fix's force-wake + identity-check
+        // mechanism, exercised deterministically without waiting a real 2s.
+        SystemOverload.startProbe();
+        Thread probe = findProbeThread();
+        assertThat(probe).as("probe thread must be running").isNotNull();
+        assertThat(probe.isAlive()).as("probe thread must be alive after start").isTrue();
+
+        // Force-wake exactly as the join(2000)-timeout path does (startProbe :117 / stopProbe :153).
+        probe.interrupt();
+        probe.join(2_000);
+        assertThat(probe.isAlive())
+                .as("interrupted probe must exit via probeLoop's InterruptedException path")
+                .isFalse();
+
+        // The identity-checked finally must have cleared the running flag → restart cleanly.
+        SystemOverload.startProbe();
+        Thread probe2 = findProbeThread();
+        assertThat(probe2).as("fresh probe must start after the interrupted one exits").isNotNull();
+        assertThat(probe2.isAlive()).as("fresh probe must be alive after restart").isTrue();
+        SystemOverload.stopProbe();
+        Thread.sleep(150); // let the probe fully drain
+        assertThat(countProbeThreads())
+                .as("at most ONE probe thread may exist after a stop/start cycle")
+                .isLessThanOrEqualTo(1);
+    }
+
+    private static Thread findProbeThread() {
+        for (Thread t : Thread.getAllStackTraces().keySet()) {
+            if ("circuit-breaker-cpu-probe".equals(t.getName())) {
+                return t;
+            }
+        }
+        return null;
+    }
+
+    private static int countProbeThreads() {
+        int n = 0;
+        for (Thread t : Thread.getAllStackTraces().keySet()) {
+            if (t.isAlive() && "circuit-breaker-cpu-probe".equals(t.getName())) {
+                n++;
+            }
+        }
+        return n;
+    }
 }

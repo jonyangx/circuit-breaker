@@ -50,10 +50,16 @@ public final class SegmentedConcurrency {
             return -1;
         }
 
-        // AA Defect 3 fix: pessimistic pre-check — if the global total is already at the limit,
-        // reject without touching the segment counters. Eliminates the rollback storm under
-        // sustained contention at a tight limit (increment → sum → decrement churn).
-        if (st.sumConcurrency() >= cfg.concurrencyLimit) {
+        // AA Defect 3 fix + HT-3 optimization: pessimistic pre-check — if the global total is
+        // already at the limit, reject without touching the segment counters. Eliminates the
+        // rollback storm under sustained contention at a tight limit (increment → sum → decrement
+        // churn). Conditional on limitPerSeg <= 2 (i.e. concurrencyLimit <= 32 with SEG=16): when
+        // the limit is wide the already-saturated case is rare, so the 16-read pre-check is almost
+        // always wasted — the post-increment sum + (rare) rollback below is the cheaper backstop.
+        // Happy path drops from 33 volatile reads + 1 write to 17 reads + 1 write (AA HT-3
+        // quantification). Global enforcement is UNCHANGED: the post-increment sum below is exact
+        // and remains the correctness backstop regardless of this fast-path filter.
+        if (limitPerSeg <= 2 && st.sumConcurrency() >= cfg.concurrencyLimit) {
             return -1;
         }
 

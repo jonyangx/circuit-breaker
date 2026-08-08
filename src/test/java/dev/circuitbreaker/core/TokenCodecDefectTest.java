@@ -83,6 +83,24 @@ class TokenCodecDefectTest {
     }
 
     /**
+     * TA-4 (AA §2.7): once nowRelMs exceeds 2^27 ms (~37h uptime) the 27-bit time field wraps.
+     * RT computed by modular subtraction must stay EXACT as long as a single RT < 2^27 ms — a
+     * release just after wrap decodes a small (rolled-over) time and the mask recovers the true
+     * elapsed ms. This locks in the wrap behavior that {@link #timeFieldTruncatedAt27Bits} only
+     * documents, so production logic depending on {@link TokenCodec#rtMs} cannot regress.
+     */
+    @Test
+    void rtMsCorrectWhenTimeFieldWrapsAcrossUptime() {
+        long timeMask = (1L << TokenCodec.TIME_BITS) - 1; // 2^27 - 1
+        long acquireTime = timeMask - 100;                // acquired 100ms before the wrap
+        long token = TokenCodec.encode(acquireTime, 1, 1, 0, 0x01);
+
+        long now = 52;                                    // released 52ms after the wrap
+        // True elapsed = (timeMask+1 − acquireTime) + (now − 0) = 101 + 52 = 153ms (< 2^27 → exact).
+        assertThat(TokenCodec.rtMs(now, token)).isEqualTo(153);
+    }
+
+    /**
      * BR-053: resourceId is embedded and round-trips for all valid IDs (0..1023).
      */
     @Test

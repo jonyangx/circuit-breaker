@@ -166,6 +166,79 @@ class TpsDynamicsBreakerTest {
     }
 
     /**
+     * TS-3 (AA §2.3) "compressed attack" final-trip side: thousands of same-instant failures per
+     * 16ms quantum. Only the FIRST failure in each quantum carries α = Δt/τ (drives ppm); the rest
+     * see dt=0 → α=0 and only accumulate count (EWMA low-pass design intent, §9.1). A micro-burst
+     * (≤50 same-ms) is damped — proven by {@link #microBurstFailuresDampenedByLowAlpha} — but a
+     * burst sustained across a τ-horizon MUST converge past the threshold and trip. This is the
+     * boundary the micro-burst test intentionally does not cover (SA AC-2 / AC-11).
+     *
+     * <p>AA quantification: ppm climbs from 0 as pₙ₊₁ = pₙ + (1/τ)(1M−pₙ) per effective sample, so
+     * reaching 500k takes ≈ 0.693τ (τ=1s → ~700ms). The 16ms EWMA quantum keeps the clock
+     * deterministic (no wall-clock dependency).
+     */
+    @Test
+    void sustainedCompressedFailureBurstAcrossTauHorizonUltimatelyTrips() {
+        ResourceConfig c = cfg(5);
+        ResourceState st = new ResourceState();
+        EwmaCircuitBreaker.tryAcquire(st, c, 0);
+        // Prime a success one quantum (16ms) before the burst so the FIRST failure gets a real dt
+        // (α > 0) and drives ppm. Without priming, lastUpdateMs=0 makes dt≈uptime → α≈0.63 and the
+        // first sample already carries near-threshold ppm, which is the cold-start path (SA LT-4),
+        // not the steady-state compressed-attack path we are fixing here.
+        EwmaCircuitBreaker.release(st, 984L, true, c, true); // nowQ = 61
+
+        long now = 1000L; // nowQ = 62
+        int msElapsed = 0;
+        while (EwmaCircuitBreaker.brState(st.breakerState.get()) == EwmaCircuitBreaker.CLOSED
+                && msElapsed < 3_000) {
+            for (int i = 0; i < 1000; i++) { // compressed burst: same-instant failures
+                EwmaCircuitBreaker.release(st, now, false, c, true);
+            }
+            now += 16; // next 16ms quantum
+            msElapsed += 16;
+        }
+        assertThat(EwmaCircuitBreaker.brState(st.breakerState.get()))
+                .as("sustained same-instant compressed failures must eventually trip")
+                .isEqualTo(EwmaCircuitBreaker.OPEN);
+        // AA §2.3: convergence to ~0.693τ; τ=1s → ~700ms. Generous band for the 16ms quantum,
+        // LUT interpolation and fixed-point rounding: 450..1200ms (well below the 3000ms ceiling).
+        assertThat(msElapsed)
+                .as("compressed attack must trip at ~0.693τ (≈700ms for τ=1s), got %dms", msElapsed)
+                .isBetween(450, 1200);
+    }
+
+    /**
+     * TA-3 (AA §2.7): a large forward clock jump (GC STW / process suspend) must re-seed the EWMA
+     * (count=1, fresh α) — a single failure right after the jump must NOT trip (count=1 < minCalls),
+     * must NOT carry stale pre-jump ppm, and must leave the state machine un-corrupted.
+     */
+    @Test
+    void hugeForwardJumpReSeedsEwmaWithoutFalseTrip() {
+        ResourceConfig c = cfg(5);
+        ResourceState st = new ResourceState();
+        EwmaCircuitBreaker.tryAcquire(st, c, 0);
+
+        // Drive ppm up with a τ-spaced failure.
+        EwmaCircuitBreaker.release(st, 1000L, false, c, true);
+        assertThat(EwmaCircuitBreaker.ewPpm(st.ewmaState.get())).isGreaterThan(0);
+
+        // Extreme forward jump (2^31 ms ≈ 24.8 days): the absolute-clock detector (R1) sees the
+        // true gap → re-seed (count=1). A single failure must not trip (count=1 < minCalls=5).
+        long hugeNow = 1000L + (1L << 31);
+        EwmaCircuitBreaker.release(st, hugeNow, false, c, true);
+        assertThat(EwmaCircuitBreaker.ewCount(st.ewmaState.get()))
+                .as("long forward jump must re-seed the EWMA (fresh count=1)")
+                .isEqualTo(1);
+        assertThat(EwmaCircuitBreaker.brState(st.breakerState.get()))
+                .as("single failure after re-seed must not trip (count < minCalls)")
+                .isEqualTo(EwmaCircuitBreaker.CLOSED);
+        assertThat(EwmaCircuitBreaker.ewPpm(st.ewmaState.get()))
+                .as("re-seeded ppm must reflect only the new sample (1M = 100% failure)")
+                .isEqualTo(1_000_000);
+    }
+
+    /**
      * §9.7: Reverse clock — nowMs goes backward within the 20-bit lastUpdateMs mask range.
      * Modular subtraction: dt = (now - last) & EW_LAST_MASK.
      * If last=2000, now=1500: (1500-2000) & 0xFFFFF = -500 & 0xFFFFF = 1048076.

@@ -7,6 +7,8 @@ import org.junit.jupiter.api.Test;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -60,6 +62,60 @@ class TpsDynamicsConcurrencyTest {
         // With 20 threads contending on limit=10, some will be blocked (-1 returned),
         // so sum will be between limit and threads.
         assertThat(sum).as("concurrency overshoot may exceed limit, but must be bounded").isBetween(0L, (long) threads);
+    }
+
+    /**
+     * HT-3 (AA §2.1): with concurrencyLimit &gt; 32, limitPerSeg = ceil(limit/SEG) &gt; 2, so DA's
+     * conditional pessimistic pre-check is SKIPPED (happy path drops from 33 to 17 volatile reads).
+     * Global enforcement must be UNCHANGED — the post-increment sum remains the exact backstop, so
+     * concurrent overshoot stays bounded by the per-segment cap (≤ limit + SEG) and release never
+     * goes negative. This is the high-TPS contention regime the pre-check optimization targets.
+     */
+    @Test
+    void highLimitSkipsPrecheckButStillEnforcesGlobalLimitWithinBoundedOvershoot() throws Exception {
+        int limit = 100;  // limitPerSeg = ceil(100/16) = 7 > 2 → pre-check skipped
+        int threads = 256;
+        ResourceState st = new ResourceState();
+        ResourceConfig cfg = new ResourceConfig(0x04, 0, 0, 0, 1, 1000, 1000, limit, 1);
+
+        ExecutorService es = Executors.newFixedThreadPool(threads);
+        CountDownLatch start = new CountDownLatch(1);
+        AtomicInteger held = new AtomicInteger(); // logical in-flight count (peak tracked)
+        AtomicInteger peak = new AtomicInteger();
+        AtomicInteger blocked = new AtomicInteger();
+
+        for (int t = 0; t < threads; t++) {
+            es.submit(() -> {
+                try {
+                    start.await();
+                    int bidx = SegmentedConcurrency.tryAcquire(st, cfg);
+                    if (bidx >= 0) {
+                        int now = held.incrementAndGet();
+                        peak.accumulateAndGet(now, Math::max);
+                        Thread.sleep(10); // hold briefly to maximize concurrent overlap
+                        SegmentedConcurrency.release(st, bidx);
+                        held.decrementAndGet();
+                    } else {
+                        blocked.incrementAndGet();
+                    }
+                } catch (Exception e) {
+                    throw new RuntimeException(e);
+                }
+            });
+        }
+        start.countDown();
+        es.shutdown();
+        es.awaitTermination(10, TimeUnit.SECONDS);
+
+        // Worst-case concurrent in-flight: per-segment cap × SEG = 7 × 16 = 112 = limit + 12 (≤ limit + SEG).
+        assertThat(peak.get())
+                .as("high-limit (pre-check skipped) overshoot must stay ≤ limit + SEG")
+                .isLessThanOrEqualTo(limit + ResourceState.SEG);
+        assertThat(blocked.get())
+                .as("256 threads contending for limit=100 must produce some blocks")
+                .isGreaterThan(0);
+        assertThat(st.sumConcurrency()).as("every acquired token must be released").isZero();
+        assertThat(held.get()).as("logical held count must return to zero").isZero();
     }
 
     /**
